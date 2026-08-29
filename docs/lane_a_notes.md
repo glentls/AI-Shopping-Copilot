@@ -4,30 +4,36 @@
 
 Measurements use all 50,000 rows in `data/catalog.jsonl`. The “before” column
 is the thin skeleton measured immediately before the lexicon changes; the
-“after” column is artifact version 2 after removing the universal
+“after” column is artifact version 3 after removing the universal
 `Clothing, Shoes & Jewelry` taxonomy root.
 
 | Slot | Before | After |
 | --- | ---: | ---: |
 | category | 100.0% | 99.3% |
 | material | 67.9% | 78.8% |
-| color | 45.1% | 48.2% |
-| size | 5.4% | 22.8% |
-| style | 26.8% | 51.4% |
+| color | 45.1% | 48.0% |
+| size | 5.4% | 22.7% |
+| style | 26.8% | 49.7% |
 | brand | 99.4% | 98.9% |
 | budget | 0.0% | 20.8% |
-| feature | 55.4% | 68.1% |
-| use_case | 51.5% | 57.2% |
+| feature | 55.4% | 67.8% |
+| use_case | 51.5% | 56.9% |
 
 The brand decrease is intentional: `generic`, `unknown`, and other placeholder
 stores no longer count as brands. Category coverage likewise excludes products
 whose only taxonomy value is the universal root. Budget coverage reflects the
 catalog's non-null numeric prices and must be used for soft ranking only.
 
-On the same machine, a clean build took 82.7 seconds and produced a 10 MB JSON
-artifact. Loading took 0.267 seconds. Across all nine slots, 25 repeated
-`distribution()` calls over 5,000 candidates had medians below 0.9 ms; the
-worst observed individual call was 1.65 ms.
+On the same machine, a clean build took 89.0 seconds and produced a 10 MB JSON
+artifact. Loading took 0.261 seconds. Across all nine slots, 25 repeated
+`distribution()` calls over 5,000 candidates had medians below 0.8 ms; the
+worst observed individual call was 1.58 ms.
+
+The catalog-prose precision pass reduced `soft` from 11,411 to 11,167 products,
+`work` from 7,094 to 6,259, and `classic` from 6,019 to 4,245. It also removed
+47 negated `waterproof` matches and 32 negated `underwire` matches. On the
+public evaluator, this changed one result from rank 3 to rank 4: Hit Rate and
+MTTC were unchanged, while the technical score moved from 0.744030 to 0.743905.
 
 Catalog confidence is based on the strongest source: store/price 1.00,
 structured details 0.99, taxonomy 0.98, title 0.95, features 0.82, and
@@ -90,9 +96,13 @@ these optional ranking signals without changing the frozen shared contract.
   but loses fine-grained distinctions.
 - Negation is clause-scoped. Complex constructions such as “not only black” or
   nested comparisons can still be misread.
-- Catalog prose may deny or compare a feature (“not waterproof”, “softer than”)
-  yet still produce a low-confidence description match. Only customer-message
-  extraction currently assigns negative polarity.
+- Catalog negation is clause-local and suppresses denied values such as “not
+  waterproof” and “no underwire.” Long-distance or nested negation may still be
+  missed; if the same canonical concept also has a positive mention, the
+  positive evidence wins.
+- Ambiguous prose-level `work` and `classic` matches require use-case/style
+  context, and care instructions such as “use a soft cloth” do not tag the
+  product as soft. These rules favor precision and can miss unusual wording.
 - Short and polysemous terms remain risky: `small` can describe dimensions
   rather than a labeled size, `work` may appear as a verb, and names such as
   Columbia or Vans can be used non-commercially. Size matching is therefore

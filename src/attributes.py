@@ -21,7 +21,7 @@ from src.lexicons import PATTERNS
 
 
 ARTIFACT_NAME = "attributes.json"
-ARTIFACT_VERSION = 2
+ARTIFACT_VERSION = 3
 
 SOURCE_CONFIDENCE = {
     "details": 0.99,
@@ -55,15 +55,72 @@ _DIRECT_SIZE_RE = re.compile(
     r"^(?:US\s*)?(?P<size>\d{1,3}(?:\.5)?|2[6-9](?:aa|a|b|c|d{1,3}|e|f|g|h)|[3-5]\d(?:aa|a|b|c|d{1,3}|e|f|g|h))$",
     re.IGNORECASE,
 )
+_CATALOG_NEGATION_SLOTS = frozenset({
+    "material", "color", "size", "style", "feature", "use_case",
+})
+_CATALOG_CLAUSE_BREAK_RE = re.compile(
+    r"[,;.!?:]|\b(?:but|however|although|though|yet)\b",
+    re.IGNORECASE,
+)
+_CATALOG_NEGATION_RE = re.compile(
+    r"\b(?P<cue>not|no|without|avoid|avoids|avoiding|exclude|excludes|excluding|"
+    r"lack|lacks|lacking|non)\b",
+    re.IGNORECASE,
+)
+_NEGATION_DISTANCE = {
+    "not": 4,
+    "no": 3,
+    "without": 4,
+    "avoid": 3,
+    "avoids": 3,
+    "avoiding": 3,
+    "exclude": 3,
+    "excludes": 3,
+    "excluding": 3,
+    "lack": 3,
+    "lacks": 3,
+    "lacking": 3,
+    "non": 0,
+}
+_SOFT_CARE_RE = re.compile(
+    r"(?:\bsoft[\s-]+(?:cloth|brush|towel|sponge)\b"
+    r"|\b(?:clean|wipe|polish|buff)(?:\s+\w+){0,3}\s+with\s+(?:a\s+)?soft\b)",
+    re.IGNORECASE,
+)
+_WORK_NOUN_RE = re.compile(
+    r"^[\s-]*(?:wear|attire|outfit|clothes?|shirts?|pants?|shorts?|boots?|shoes?|"
+    r"uniforms?|environment|place|day|week|bag|tote|gear)\b",
+    re.IGNORECASE,
+)
+_WORK_OCCASION_RE = re.compile(
+    r"\b(?:occasion|suitable|perfect|ideal|great|wear|worn)\b.{0,80}$",
+    re.IGNORECASE,
+)
+_WORK_ACTIVITY_LIST_RE = re.compile(
+    r"\b(?:office|business|daily|casual|driving|school|travel|party|shopping)\b.{0,45}$",
+    re.IGNORECASE,
+)
+_CLASSIC_STYLE_RE = re.compile(
+    r"^classic(?:[\s-]+\w+){0,4}[\s-]+(?:style|fit|look|design|silhouette|cut|"
+    r"shape|appeal|aesthetic|fashion|briefs?|shirts?|tees?|tops?|dresses?|skirts?|"
+    r"pants?|jeans|shorts?|sweaters?|jackets?|coats?|suits?|bras?|shoes?|boots?|"
+    r"sneakers?|sandals?|watches?|rings?|earrings?|necklaces?|bags?|belts?|caps?|"
+    r"collars?|patterns?)\b",
+    re.IGNORECASE,
+)
+_CLASSIC_PAIRING_RE = re.compile(
+    r"^classic\s+(?:and|or|meets)\s+(?:modern|contemporary|timeless|stylish)",
+    re.IGNORECASE,
+)
 
 
 def _text(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, dict):
-        return " ".join(f"{key} {item}" for key, item in value.items())
+        return ". ".join(f"{key} {item}" for key, item in value.items())
     if isinstance(value, list):
-        return " ".join(str(item) for item in value)
+        return ". ".join(str(item) for item in value)
     return str(value)
 
 
@@ -80,14 +137,89 @@ def _category_text(value: object) -> str:
     )
 
 
-def _matched_values(slot: str, text: str) -> set[str]:
+def _catalog_is_negated(text: str, start: int) -> bool:
+    """Whether a nearby cue actually denies the following catalog value."""
+    prefix = text[max(0, start - 100):start]
+    breaks = list(_CATALOG_CLAUSE_BREAK_RE.finditer(prefix))
+    clause = prefix[breaks[-1].end():] if breaks else prefix
+    clause = re.sub(
+        r"\b(?:isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?t|doesn['’]?t|"
+        r"does\s+not|can['’]?t|cannot)\b",
+        "not",
+        clause.casefold(),
+    )
+    cues = list(_CATALOG_NEGATION_RE.finditer(clause))
+    if not cues:
+        return False
+    cue_match = cues[-1]
+    cue = cue_match.group("cue").casefold()
+    tail_words = re.findall(r"[a-z0-9]+", clause[cue_match.end():])
+    first_word = tail_words[0] if tail_words else ""
+    if cue == "not" and first_word in {"only", "just"}:
+        return False
+    if cue == "no" and first_word in {"show", "need", "worry"}:
+        return False
+    if cue == "without" and first_word in {
+        "sacrificing", "compromising", "losing", "limiting", "reducing",
+    }:
+        return False
+    return len(tail_words) <= _NEGATION_DISTANCE[cue]
+
+
+def _catalog_context_allows(
+    slot: str,
+    canonical: str,
+    text: str,
+    match: re.Match[str],
+    source: str,
+) -> bool:
+    """Apply stricter context only to ambiguous prose-level values."""
+    if source not in {"features", "description"}:
+        return True
+    surface = re.sub(r"[\s-]+", " ", match.group(0).casefold()).strip()
+    around = text[max(0, match.start() - 45):match.end() + 60]
+
+    if (slot, canonical) == ("feature", "soft"):
+        return not _SOFT_CARE_RE.search(around)
+
+    if (slot, canonical) == ("use_case", "work") and surface == "work":
+        left = text[max(0, match.start() - 100):match.start()]
+        right = text[match.end():match.end() + 60]
+        if re.search(r"\b(?:for|at)\s*$", left, re.IGNORECASE):
+            return True
+        if re.search(r"\b(?:wear|worn|commute)\b.{0,25}\bto\s*$", left, re.IGNORECASE):
+            return True
+        if _WORK_NOUN_RE.search(right):
+            return True
+        if _WORK_OCCASION_RE.search(left) or _WORK_ACTIVITY_LIST_RE.search(left):
+            return True
+        return bool(re.match(
+            r"^[\s,;/]*(?:or|and)\s+(?:play|office|business)\b",
+            right,
+            re.IGNORECASE,
+        ))
+
+    if (slot, canonical) == ("style", "classic") and surface == "classic":
+        following = text[match.start():match.end() + 80]
+        return bool(_CLASSIC_STYLE_RE.search(following) or _CLASSIC_PAIRING_RE.search(following))
+
+    return True
+
+
+def _matched_values(slot: str, text: str, source: str | None = None) -> set[str]:
     if not text:
         return set()
-    return {
-        canonical
-        for canonical, pattern in PATTERNS.get(slot, ())
-        if pattern.search(text)
-    }
+    values: set[str] = set()
+    for canonical, pattern in PATTERNS.get(slot, ()):
+        for match in pattern.finditer(text):
+            if source is not None:
+                if slot in _CATALOG_NEGATION_SLOTS and _catalog_is_negated(text, match.start()):
+                    continue
+                if not _catalog_context_allows(slot, canonical, text, match, source):
+                    continue
+            values.add(canonical)
+            break
+    return values
 
 
 def _dynamic_sizes(text: str, direct: bool = False) -> set[str]:
@@ -180,29 +312,29 @@ def _tag_product(product: dict) -> tuple[dict[str, dict[str, float]], float | No
 
     # Taxonomy and title are dependable category sources. Product prose often
     # mentions related products, so it is intentionally excluded here.
-    record("category", _matched_values("category", categories), "categories")
-    record("category", _matched_values("category", title), "title")
+    record("category", _matched_values("category", categories, "categories"), "categories")
+    record("category", _matched_values("category", title, "title"), "title")
 
     for value in _brand_values(product):
         record("brand", (value,), "store")
 
     for slot in ("material", "color", "style", "feature", "use_case"):
-        record(slot, _matched_values(slot, details_text), "details")
-        record(slot, _matched_values(slot, title), "title")
-        record(slot, _matched_values(slot, features), "features")
-        record(slot, _matched_values(slot, description), "description")
+        record(slot, _matched_values(slot, details_text, "details"), "details")
+        record(slot, _matched_values(slot, title, "title"), "title")
+        record(slot, _matched_values(slot, features, "features"), "features")
+        record(slot, _matched_values(slot, description, "description"), "description")
 
     # Unqualified "small" and "large" are noisy in product prose. Restrict
     # static sizes to titles and dedicated structured fields, while still
     # mining contextual numeric sizes from titles/features/descriptions.
-    record("size", _matched_values("size", title), "title")
+    record("size", _matched_values("size", title, "title"), "title")
     record("size", _dynamic_sizes(title), "title")
     record("size", _dynamic_sizes(features), "features")
     record("size", _dynamic_sizes(description), "description")
     for key, value in details.items():
         if _normalize_label(key) in _SIZE_DETAIL_KEYS:
             size_text = _text(value)
-            record("size", _matched_values("size", size_text), "details")
+            record("size", _matched_values("size", size_text, "details"), "details")
             record("size", _dynamic_sizes(size_text, direct=True), "details")
 
     price = _price(product.get("price"))

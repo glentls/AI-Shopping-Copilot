@@ -209,5 +209,102 @@ class AttributeTableTest(unittest.TestCase):
         self.assertLess(statistics.median(timings), 0.010)
 
 
+class CatalogPrecisionTest(unittest.TestCase):
+    def test_prose_context_and_negation_filter_catalog_values(self) -> None:
+        products = [
+            {
+                "parent_asin": "NEGATED",
+                "title": "Rain Shell",
+                "features": ["Not waterproof", "A breathable shell"],
+                "description": ["Available in blue, not black. Synthetic, not leather."],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Jackets"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "RESISTANT",
+                "title": "Rain Jacket",
+                "features": ["Water-resistant but not fully waterproof"],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Jackets"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "WIRELESS",
+                "title": "Wireless Bra",
+                "features": ["No underwire construction"],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Bras"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "EXCEPTIONS",
+                "title": "Everyday Shirt",
+                "features": [
+                    "Not only comfortable but also soft",
+                    "Breathable without sacrificing comfort",
+                ],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Shirts"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "BROAD_FALSE",
+                "title": "Metal Jewelry Clasp",
+                "features": [],
+                "description": [
+                    "Clean with a soft cloth. The clasp will work with classic accessories."
+                ],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Jewelry"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "BROAD_TRUE",
+                "title": "Classic Soft Work Boots",
+                "features": [],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Boots"],
+                "store": "Example",
+                "price": None,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            catalog = root / "catalog.jsonl"
+            catalog.write_text(
+                "".join(json.dumps(product) + "\n" for product in products),
+                encoding="utf-8",
+            )
+            table = build_attribute_table(catalog, root / "artifacts")
+
+        self.assertNotIn("NEGATED", table.matching("feature", "waterproof"))
+        self.assertIn("NEGATED", table.matching("feature", "breathable"))
+        self.assertIn("RESISTANT", table.matching("feature", "waterproof"))
+        self.assertIn("WIRELESS", table.matching("feature", "wireless"))
+        self.assertNotIn("WIRELESS", table.matching("feature", "underwire"))
+        self.assertEqual(table.matching("color", "blue"), {"NEGATED"})
+        self.assertNotIn("NEGATED", table.matching("color", "black"))
+        self.assertNotIn("NEGATED", table.matching("material", "leather"))
+
+        for value in ("comfortable", "soft", "breathable"):
+            self.assertIn("EXCEPTIONS", table.matching("feature", value))
+        self.assertNotIn("BROAD_FALSE", table.matching("feature", "soft"))
+        self.assertNotIn("BROAD_FALSE", table.matching("use_case", "work"))
+        self.assertNotIn("BROAD_FALSE", table.matching("style", "classic"))
+        self.assertIn("BROAD_TRUE", table.matching("feature", "soft"))
+        self.assertIn("BROAD_TRUE", table.matching("use_case", "work"))
+        self.assertIn("BROAD_TRUE", table.matching("style", "classic"))
+
+
 if __name__ == "__main__":
     unittest.main()
