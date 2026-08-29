@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # BM25 column weights: parent_asin, title, categories, features, details, store, description
-BM25_WEIGHTS = (0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
+BM25_WEIGHTS = (0.0, 6.0, 4.0, 4.0, 4.0, 1.5, 1.0)
 BM25_ORDER_BY = f"bm25(products, {', '.join(str(weight) for weight in BM25_WEIGHTS)})"
 
 
@@ -129,3 +129,7 @@ class CatalogStore:
             (fts_expression,),
         ).fetchone()
         return int(row[0]) if row else 0
+
+    @property
+    def size(self) -> int:
+        return len(self._products)

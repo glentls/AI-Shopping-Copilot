@@ -236,12 +236,26 @@ Output: aggregate metrics to stdout; full per-session breakdown in `results.json
 
 ### Score targets
 
-| Metric (Pillar IV) | Baseline | Current (~Pillar III) | Stretch |
-|--------|----------|-------------------------|---------|
-| Hit Rate@10 (Coverage) | 0.125 | **0.855** | ≥ 0.88 |
-| MRR (Precision) | 0.068 | **0.567** | ≥ 0.60 |
-| MTTC (Efficiency) | 9.81 | **4.21** | ≤ 4.0 |
-| TechnicalScore | 0.107 | **0.733** | ≥ 0.75 |
+| Metric (Pillar IV) | Baseline | Pillar III | Current (tuned) | Stretch |
+|--------|----------|------------|-----------------|---------|
+| Hit Rate@10 (Coverage) | 0.125 | 0.855 | **0.995** | 1.00 |
+| MRR (Precision) | 0.068 | 0.567 | **0.812** | ≥ 0.85 |
+| MTTC (Efficiency) | 9.81 | 4.21 | **2.12** | ≤ 2.0 |
+| TechnicalScore | 0.107 | 0.733 | **0.919** | ≥ 0.93 |
+
+Per scenario at 0.9187: browsing 1.000 hit / 0.781 MRR, buying 0.988 / 0.796,
+intent_override 1.000 / 0.874, boundary 1.000 / 1.000. One miss out of 200 sessions.
+MRR is now the binding constraint — 55 of 199 hits still land at rank 2–10.
+
+### Tuning tools
+
+```bash
+python3 scripts/score.py mylabel   # one run, compact metrics + rank/turn histograms
+python3 scripts/sweep.py           # in-process weight grid, reuses one catalog index
+```
+
+`sweep.py` monkey-patches module constants and reuses a single `Agent`, so a configuration
+costs ~8s instead of a full index rebuild. Edit its `GRID` to choose knobs.
 
 ### Manual testing (not just the evaluator)
 
@@ -264,6 +278,9 @@ starter/
   agent.py                      Pillar II + III orchestration
   retrieval/                    Pillar I (HybridSearcher, BM25, filters, reranker, feedback)
   personalization/              Pillar III (profile_signals, rerank_boost, question_priority)
+scripts/
+  score.py                      One evaluation run, compact metrics
+  sweep.py                      Weight grid sweep over a shared catalog index
 tests/
   test_retrieval.py
   test_personalization.py
@@ -271,6 +288,7 @@ tests/
   test_evaluator.py
 docs/
   pillars.md                    Official Pillar I–IV notes + improvement matrix
+  tuning_log.md                 What moved the score, and what did not
 evaluator/local_evaluator.py    Pillar IV scorer (do not edit)
 ```
 
@@ -288,8 +306,8 @@ Use this framing when writing Devpost or presenting:
 
 **Why our approach matters:**
 
-1. **Simulator-aware retrieval (Pillar I)** — reranking boosts exact phrase overlap with disclosed constraints.
-2. **Intent-routed dual paths (Pillar I + II)** — buying = precision; browsing = broad recall.
+1. **Simulator-aware retrieval (Pillar I)** — reranking boosts exact phrase overlap with disclosed constraints, plus a category-path signal that is guaranteed true for the target.
+2. **Recall-first retrieval, precision in the reranker (Pillar I + II)** — buying attempts a strict conjunctive pass and falls back to broad recall. We measured that narrowing candidates with hard Boolean constraints loses more targets than it gains rank on, so precision lives in the reranker instead. See [docs/tuning_log.md](docs/tuning_log.md).
 3. **Dynamic context programming (Pillar III)** — dialog history + profile distil into search context each turn; retrieval feedback adapts clarification strategy.
 4. **Evaluation-driven tuning (Pillar IV)** — optimize Coverage (Hit Rate), Precision (MRR), Efficiency (MTTC) on the public matrix.
 5. **Offline-first** — no API keys, in-memory only.

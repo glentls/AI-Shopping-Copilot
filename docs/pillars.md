@@ -92,14 +92,17 @@ python3 -m evaluator.local_evaluator
 
 Outputs aggregate + `scenario_metrics` in `results.json`.
 
-### Current benchmark (Pillar III integrated, local public set)
+### Current benchmark (tuned, local public set)
 
-| Metric | Baseline | Post I+II (~0.615) | With Pillar III (~0.733) |
-|--------|----------|---------------------|---------------------------|
-| Hit Rate@10 (Coverage) | 0.125 | 0.755 | **0.855** |
-| MRR (Precision) | 0.068 | 0.468 | **0.567** |
-| MTTC (Efficiency) | 9.81 | 6.13 | **4.21** |
-| TechnicalScore | 0.107 | 0.615 | **0.733** |
+| Metric | Baseline | Post I+II | With Pillar III | Tuned |
+|--------|----------|-----------|-----------------|-------|
+| Hit Rate@10 (Coverage) | 0.125 | 0.755 | 0.855 | **0.995** |
+| MRR (Precision) | 0.068 | 0.468 | 0.567 | **0.812** |
+| MTTC (Efficiency) | 9.81 | 6.13 | 4.21 | **2.12** |
+| TechnicalScore | 0.107 | 0.615 | 0.733 | **0.919** |
+
+Experiment-by-experiment record, including the changes that made things worse and the
+defects found on the way: [tuning_log.md](tuning_log.md).
 
 ### How to improve each Pillar IV dimension
 

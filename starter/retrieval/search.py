@@ -9,7 +9,7 @@ from starter.retrieval.filters import apply_metadata_filters
 from starter.retrieval.query_builder import build_fts_expression, strip_boilerplate, tokenize_terms
 from starter.retrieval.reranker import rerank_candidates
 
-CANDIDATE_POOL_SIZE = 50
+CANDIDATE_POOL_SIZE = 60
 FALLBACK_BROAD_EXPRESSION = '"clothing" OR "shoes" OR "apparel"'
 
 
@@ -35,14 +35,17 @@ class HybridSearcher:
         filters = filters or {}
         normalized_mode = "buying" if mode == "buying" else "browsing"
         slot_values = _slot_values_from_filters(filters, normalized_mode)
-        expression = build_fts_expression(query_text, normalized_mode, slot_values)
+        pool_size = max(top_k, CANDIDATE_POOL_SIZE)
         relaxed_search = False
 
+        # Buying starts from a precision-first AND expression; when nothing satisfies every
+        # disclosed requirement at once, the recall-first route below takes over.
+        expression = build_fts_expression(query_text, normalized_mode, slot_values)
         if not expression:
             expression = _fallback_expression(query_text)
 
         candidate_count = self._store.count_matches(expression)
-        asins = self._store.bm25_search(expression, limit=max(top_k, CANDIDATE_POOL_SIZE))
+        asins = self._store.bm25_search(expression, limit=pool_size)
 
         if not asins and normalized_mode == "buying":
             relaxed_expression = build_fts_expression(query_text, "browsing", slot_values)
@@ -50,7 +53,7 @@ class HybridSearcher:
                 relaxed_search = True
                 expression = relaxed_expression
                 candidate_count = self._store.count_matches(expression)
-                asins = self._store.bm25_search(expression, limit=max(top_k, CANDIDATE_POOL_SIZE))
+                asins = self._store.bm25_search(expression, limit=pool_size)
 
         if not asins:
             relaxed_search = True
@@ -95,13 +98,11 @@ def _slot_values_from_filters(filters: dict, mode: str = "browsing") -> list[str
         raw = filters.get(key)
         if isinstance(raw, list):
             values.extend(
-                str(item).strip()
-                for item in raw
-                if mode == "browsing" or _is_concise_slot_value(str(item).strip())
+                str(item).strip() for item in raw if _is_concise_slot_value(str(item).strip())
             )
         elif raw not in (None, ""):
             value = str(raw).strip()
-            if mode == "browsing" or _is_concise_slot_value(value):
+            if _is_concise_slot_value(value):
                 values.append(value)
     if filters.get("max_price") is not None:
         values.append(f"budget around ${filters['max_price']}")
@@ -109,7 +110,7 @@ def _slot_values_from_filters(filters: dict, mode: str = "browsing") -> list[str
 
 
 def _is_concise_slot_value(value: str) -> bool:
-    """Keep structured values out of FTS while history carries full utterances."""
+    """Whole utterances crowd out real constraints in the phrase budget, so drop them."""
     lowered = value.lower()
     utterance_markers = (
         "i'm looking for", "i am looking for", "key requirement is",

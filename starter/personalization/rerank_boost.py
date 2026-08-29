@@ -5,7 +5,7 @@ from starter.personalization.profile_signals import ProfileSignals, parse_profil
 TAG_MATCH_SCORE = 2.0
 FEATURE_TAG_BONUS = 1.0
 SUMMARY_TERM_SCORE = 1.0
-MAX_PROFILE_BOOST = 8.0
+MAX_PROFILE_BOOST = 2.0
 
 
 def compute_profile_boost(product: object, profile: dict | ProfileSignals | None) -> float:

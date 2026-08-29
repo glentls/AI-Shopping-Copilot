@@ -22,22 +22,24 @@ BOILERPLATE_SUBSTRINGS = (
     "but i'm still exploring",
 )
 
+# Constraints legitimately contain periods ("3.5 inches", "100% cotton. Imported."),
+# so each turn occupies its own line and captures run to the end of that line.
 CONSTRAINT_PATTERNS = (
-    re.compile(r"key requirement is:\s*(.+?)(?:\.|$)", re.I),
-    re.compile(r"what matters is:\s*(.+?)(?:\.|$)", re.I),
-    re.compile(r"what i need is:\s*(.+?)(?:\.|$)", re.I),
+    re.compile(r"key requirement is:\s*(.+)", re.I),
+    re.compile(r"what matters is:\s*(.+)", re.I),
+    re.compile(r"what i need is:\s*(.+)", re.I),
     re.compile(r"budget around\s*(\$?\s*[\d.]+)", re.I),
 )
 
 
 def strip_boilerplate(query_text: str) -> str:
-    cleaned = re.sub(r"\s+", " ", query_text.strip())
+    cleaned = re.sub(r"[^\S\n]+", " ", query_text.strip())
     for phrase in BOILERPLATE_SUBSTRINGS:
         cleaned = re.sub(re.escape(phrase), " ", cleaned, flags=re.I)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return re.sub(r"[^\S\n]+", " ", cleaned).strip()
 
 
-def _quote_fts(value: str) -> str:
+def quote_fts(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", value).strip(" -;,.\t\n")
     if not cleaned:
         return ""
@@ -69,11 +71,10 @@ def tokenize_terms(text: str) -> list[str]:
     )[:40]
 
 
-def build_fts_expression(
+def _phrases_and_terms(
     query_text: str,
-    mode: str = "browsing",
     slot_values: list[str] | None = None,
-) -> str:
+) -> tuple[list[str], list[str]]:
     cleaned = strip_boilerplate(query_text)
     phrases = extract_constraint_phrases(cleaned)
     if slot_values:
@@ -89,9 +90,17 @@ def build_fts_expression(
         for term in terms
         if not any(term in phrase.lower() for phrase in phrases)
     ]
+    return phrases, terms
 
-    phrase_clauses = [clause for phrase in phrases if (clause := _quote_fts(phrase))]
-    term_clauses = [clause for term in terms if (clause := _quote_fts(term))]
+
+def build_fts_expression(
+    query_text: str,
+    mode: str = "browsing",
+    slot_values: list[str] | None = None,
+) -> str:
+    phrases, terms = _phrases_and_terms(query_text, slot_values)
+    phrase_clauses = [clause for phrase in phrases if (clause := quote_fts(phrase))]
+    term_clauses = [clause for term in terms if (clause := quote_fts(term))]
 
     if mode == "buying":
         parts: list[str] = []

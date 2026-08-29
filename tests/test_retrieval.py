@@ -73,11 +73,25 @@ class QueryBuilderTest(unittest.TestCase):
         self.assertNotIn(" AND ", expr)
 
     def test_buying_expression_uses_and_for_phrases(self) -> None:
-        text = "what matters is: cotton; blue. running shoes"
+        text = "I'm looking for running shoes.\nFor that, what matters is: cotton; blue."
         expr = build_fts_expression(text, mode="buying")
         self.assertIn(" AND ", expr)
         self.assertIn('"cotton"', expr)
         self.assertIn('"blue"', expr)
+
+    def test_constraint_with_internal_period_survives(self) -> None:
+        text = "For that, what matters is: heel height: 3.5 inches; machine wash cold."
+        self.assertEqual(
+            extract_constraint_phrases(text),
+            ["heel height: 3.5 inches", "machine wash cold"],
+        )
+
+    def test_phrases_do_not_leak_across_turns(self) -> None:
+        text = "A key requirement is: 100% cotton.\nFor that, what matters is: crew neck."
+        self.assertEqual(
+            extract_constraint_phrases(text),
+            ["100% cotton", "crew neck"],
+        )
 
     def test_slot_values_included_as_phrases(self) -> None:
         expr = build_fts_expression("running shoes", mode="buying", slot_values=["lightweight mesh upper"])
@@ -231,10 +245,14 @@ class HybridSearcherTest(unittest.TestCase):
         )
         self.assertGreater(len(result.asins), 0)
 
-    def test_buying_ignores_full_utterances_as_slot_phrases(self) -> None:
+    def test_full_utterances_never_become_slot_phrases(self) -> None:
         utterance = "I'm looking for shoes. A key requirement is: blue."
-        self.assertEqual(_slot_values_from_filters({"color": utterance}, "buying"), [])
-        self.assertEqual(_slot_values_from_filters({"color": utterance}, "browsing"), [utterance])
+        for mode in ("buying", "browsing"):
+            self.assertEqual(_slot_values_from_filters({"color": utterance}, mode), [])
+
+    def test_concise_slot_values_are_kept_in_both_modes(self) -> None:
+        for mode in ("buying", "browsing"):
+            self.assertEqual(_slot_values_from_filters({"color": "blue"}, mode), ["blue"])
 
 
 class CatalogStoreTest(unittest.TestCase):

@@ -49,9 +49,12 @@ class ProfileSignalsTest(unittest.TestCase):
 
 class RerankBoostTest(unittest.TestCase):
     def test_tag_match_increases_score(self) -> None:
-        profile = {"preference_tags": ["comfort", "fit"], "rating_style": "mixed"}
-        boost = compute_profile_boost(_product(), profile)
-        self.assertGreaterEqual(boost, 4.0)
+        matching = {"preference_tags": ["comfort", "fit"], "rating_style": "mixed"}
+        unrelated = {"preference_tags": ["waterproof-xyz"], "rating_style": "mixed"}
+        self.assertGreater(
+            compute_profile_boost(_product(), matching),
+            compute_profile_boost(_product(), unrelated),
+        )
 
     def test_profile_boost_is_capped(self) -> None:
         profile = {

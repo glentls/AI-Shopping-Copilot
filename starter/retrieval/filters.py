@@ -115,8 +115,4 @@ def constraint_phrases(query_text: str, slot_values: list[str]) -> list[str]:
     for value in slot_values:
         if value and value not in phrases:
             phrases.append(value)
-    budget_values = []
-    for phrase in phrases:
-        if re.search(r"(?:budget|\$|under)\s*\d", phrase, re.I):
-            budget_values.append(phrase)
     return list(dict.fromkeys(phrase for phrase in phrases if phrase))

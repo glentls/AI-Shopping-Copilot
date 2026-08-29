@@ -7,6 +7,9 @@ from starter.retrieval.search import HybridSearcher
 
 ATTRIBUTES = ("category", "material", "color", "size", "style", "brand", "budget", "feature", "use_case")
 OVERRIDE_MARKERS = ("actually", "instead", "never mind", "nevermind", "forget that", "change of plans", "i meant", "rather")
+EXHAUSTED_MARKERS = ("additional preference", "no other requirement")
+# The final turn's question is never answered, so clarification stops one turn early.
+LAST_ACTIONABLE_TURN = 10
 ATTRIBUTE_TERMS = {
     "category": ("looking for", "need", "want", "shoes", "dress", "shirt", "bag", "jewelry", "boots"),
     "material": ("leather", "cotton", "wool", "linen", "suede", "silk", "denim", "material"),
@@ -36,6 +39,7 @@ class Agent:
             "override_pending": False, "retrieval_feedback": {},
             "intent": "browsing", "intent_locked": False,
             "exploratory_session": False,
+            "requirements_exhausted": False,
         }
 
     def set_intent(self, session_id: str, intent: str) -> None:
@@ -113,27 +117,38 @@ class Agent:
                 state["slots"][attribute] = None
                 state["slot_status"][attribute] = "unconstrained"
                 state["unconstrained"].add(attribute)
+        if any(marker in lowered for marker in EXHAUSTED_MARKERS):
+            state["requirements_exhausted"] = True
         state["history"].append(message)
 
-    def _choose_question(self, state: dict, turn: int) -> str | None:
-        if turn >= 8:
+    def _choose_question(self, state: dict, turn: int) -> tuple[str, str] | None:
+        """Pick (ask_attribute, message). A null attribute wastes the turn, so we always ask."""
+        if turn >= LAST_ACTIONABLE_TURN:
             return None
         if state["override_pending"]:
-            state["asked"].append("other"); state["override_pending"] = False
-            return "What is the most important requirement for this new request?"
-        feedback = state["retrieval_feedback"]
-        if not feedback.get("overloaded") and not feedback.get("relaxed_search"):
-            return None
-        missing = feedback.get("missing_attributes", [])
+            state["override_pending"] = False
+            state["asked"].append("other")
+            return "other", "What is the most important requirement for this new request?"
+
+        # The open wildcard surfaces any still-undisclosed requirement, while a specific
+        # attribute only pays off when the customer happens to hold that kind of constraint.
+        if not state["requirements_exhausted"]:
+            state["asked"].append("other")
+            return "other", "What else matters most for this item?"
+
+        missing = state["retrieval_feedback"].get("missing_attributes", [])
         priority = tuple(a for a in missing if a in ATTRIBUTES) if isinstance(missing, list) else ()
         priority = profile_adjusted_priority(priority, state["profile"])
         for attribute in priority:
             if state["slots"][attribute] is None and attribute not in state["unconstrained"] and attribute not in state["asked"]:
                 state["asked"].append(attribute)
-                if attribute == "category": return "What type of item are you looking for?"
-                if attribute == "use_case": return "What will you mainly use it for?"
-                return f"Do you have a preference for {attribute}?"
-        return None
+                if attribute == "category":
+                    return attribute, "What type of item are you looking for?"
+                if attribute == "use_case":
+                    return attribute, "What will you mainly use it for?"
+                return attribute, f"Do you have a preference for {attribute}?"
+        state["asked"].append("other")
+        return "other", "Anything else I should take into account?"
 
     def respond(
         self,
@@ -155,15 +170,15 @@ class Agent:
             "profile": state["profile"],
         }
         result = self.searcher.search(
-            query_text=" ".join(state["history"]), mode=state["intent"],
+            query_text="\n".join(state["history"]), mode=state["intent"],
             filters=filters, top_k=top_k,
         )
         state["retrieval_feedback"] = result.feedback
         recommendations = [{"parent_asin": asin} for asin in result.asins]
         question = self._choose_question(state, turn)
         return {
-            "message": question or "Here are the closest matches I found.",
-            "ask_attribute": state["asked"][-1] if question else None,
+            "message": question[1] if question else "Here are the closest matches I found.",
+            "ask_attribute": question[0] if question else None,
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
