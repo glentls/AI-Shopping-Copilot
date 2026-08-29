@@ -14,11 +14,14 @@ from .vocab import (
     MATERIAL_RE,
     MIN_SINGLE_WORD_BRAND_LEN,
     MIN_SINGLE_WORD_VOCAB_LEN,
+    NEGATION_CUES,
+    NEGATION_WINDOW,
     NO_PREFERENCE_PATTERNS,
     OVERRIDE_PATTERNS,
     SIZE_BARE_LETTER_RE,
     SIZE_LETTER_RE,
     SIZE_NUMERIC_RE,
+    SIZE_UNIT_MARKER_RE,
     SIZE_WIDTH_RE,
     STOPWORDS,
     STYLE_KEYWORDS,
@@ -66,14 +69,42 @@ def _matches_any(lowered_text: str, patterns: tuple[str, ...]) -> bool:
     return any(pattern in lowered_text for pattern in patterns)
 
 
-def _all_keyword_hits(lowered_text: str, vocab: tuple[str, ...]) -> list[str]:
-    """All matching vocab terms, not just the first. The attribute value is
-    still just the first hit (single value per attribute), but every hit
-    must be claimed -- otherwise a second real match left unclaimed (e.g.
-    "outdoor" claimed as use_case but "work" not, from ".. Outdoor & Work
-    Snow & Cold Weather ..") stays free for a later, wrong classifier (e.g.
-    brand) to grab."""
-    return [term for term in vocab if re.search(rf"\b{re.escape(term)}\b", lowered_text)]
+_CLAUSE_BOUNDARY_RE = re.compile(r"[,.;:!]")
+
+
+def _is_negated(lowered_text: str, match_start: int) -> bool:
+    """True if a negation cue ("don't want", "no", "without", ...) appears
+    in a small window immediately before `match_start`, not crossing a
+    clause boundary. Position-aware, clause-bounded (not whole-message) so
+    "I don't want polyester, I love cotton" negates only "polyester" -- a
+    whole-message (or unbounded-window) check would let "don't want" reach
+    across the comma and wrongly suppress the unrelated, genuinely positive
+    "cotton" in the next clause too."""
+    window = lowered_text[max(0, match_start - NEGATION_WINDOW):match_start]
+    boundaries = list(_CLAUSE_BOUNDARY_RE.finditer(window))
+    if boundaries:
+        window = window[boundaries[-1].end():]
+    return any(re.search(rf"\b{re.escape(cue)}\b", window) for cue in NEGATION_CUES)
+
+
+def _all_keyword_hits(lowered_text: str, vocab: tuple[str, ...]) -> tuple[list[str], list[str]]:
+    """Returns (all_hits, positive_hits): all matching vocab terms, and the
+    subset not preceded by a negation cue. The attribute value is the first
+    *positive* hit (e.g. skip a negated "leather" and use the next real
+    match), but every hit -- negated or not -- must still be claimed, or an
+    unclaimed second match (e.g. "outdoor" claimed as use_case but "work"
+    not, from ".. Outdoor & Work Snow & Cold Weather ..") stays free for a
+    later, wrong classifier (e.g. brand) to grab."""
+    all_hits: list[str] = []
+    positive_hits: list[str] = []
+    for term in vocab:
+        match = re.search(rf"\b{re.escape(term)}\b", lowered_text)
+        if not match:
+            continue
+        all_hits.append(term)
+        if not _is_negated(lowered_text, match.start()):
+            positive_hits.append(term)
+    return all_hits, positive_hits
 
 
 def _match_compound_alias(
@@ -203,21 +234,43 @@ class MessageParser:
     def _extract_attributes(self, lowered: str, original: str, result: ParsedMessage) -> None:
         claimed: set[str] = set()
 
-        material = MATERIAL_RE.search(lowered)
-        if material:
-            value = material.group(1).lower()
-            result.attributes["material"] = value
+        # finditer (not search): a negated first mention ("I don't want
+        # polyester, I love cotton") must not block a genuinely positive
+        # later mention. Every match found is still claimed regardless of
+        # polarity, or the negated word stays free for a later matcher.
+        material_value = None
+        for match in MATERIAL_RE.finditer(lowered):
+            value = match.group(1).lower()
             claimed.update(value.split())
+            if material_value is None and not _is_negated(lowered, match.start()):
+                material_value = value
+        if material_value:
+            result.attributes["material"] = material_value
 
-        color = COLOR_RE.search(lowered)
-        if color:
-            value = color.group(1).lower()
-            result.attributes["color"] = value
+        color_value = None
+        for match in COLOR_RE.finditer(lowered):
+            value = match.group(1).lower()
             claimed.update(value.split())
+            if color_value is None and not _is_negated(lowered, match.start()):
+                color_value = value
+        if color_value:
+            result.attributes["color"] = color_value
 
-        size_match = SIZE_NUMERIC_RE.search(lowered) or SIZE_LETTER_RE.search(lowered)
-        if size_match:
-            value = size_match.group(1)
+        # finditer + skip: raw catalog text labels a physical dimension the
+        # same way it labels a real size ("Size: 2.5'' in length" vs
+        # "Size 10") -- a unit marker right after the number means it's a
+        # dimension, not a garment/shoe size. See SIZE_UNIT_MARKER_RE.
+        numeric_size = None
+        for match in SIZE_NUMERIC_RE.finditer(lowered):
+            tail = lowered[match.end():match.end() + 12]
+            if SIZE_UNIT_MARKER_RE.search(tail):
+                continue
+            numeric_size = match.group(1)
+            break
+
+        letter_match = None if numeric_size else SIZE_LETTER_RE.search(lowered)
+        if numeric_size or letter_match:
+            value = numeric_size if numeric_size else letter_match.group(1)
             result.attributes["size"] = value.upper() if value.isalpha() else value
             claimed.add(value.lower())
         else:
@@ -233,17 +286,17 @@ class MessageParser:
         if budget:
             result.attributes["budget"] = budget.group(1)
 
-        style_hits = _all_keyword_hits(lowered, STYLE_KEYWORDS)
-        if style_hits:
-            result.attributes["style"] = style_hits[0]
-            for hit in style_hits:
-                claimed.update(hit.split())
+        style_all, style_positive = _all_keyword_hits(lowered, STYLE_KEYWORDS)
+        if style_positive:
+            result.attributes["style"] = style_positive[0]
+        for hit in style_all:
+            claimed.update(hit.split())
 
-        use_case_hits = _all_keyword_hits(lowered, USE_CASE_KEYWORDS)
-        if use_case_hits:
-            result.attributes["use_case"] = use_case_hits[0]
-            for hit in use_case_hits:
-                claimed.update(hit.split())
+        use_case_all, use_case_positive = _all_keyword_hits(lowered, USE_CASE_KEYWORDS)
+        if use_case_positive:
+            result.attributes["use_case"] = use_case_positive[0]
+        for hit in use_case_all:
+            claimed.update(hit.split())
 
         tokens = [t.lower() for t in TOKEN_RE.findall(lowered)]
 

@@ -76,6 +76,38 @@ class MessageParserAttributeTest(unittest.TestCase):
                 self.assertIn(expected_key, parsed.attributes)
                 self.assertFalse(parsed.is_vague)
 
+    def test_negation_suppresses_the_negated_attribute(self) -> None:
+        for message in ["I don't want red", "no leather please", "anything but blue"]:
+            with self.subTest(message=message):
+                parsed = self.parser.parse(message)
+                self.assertNotIn("material", parsed.attributes)
+                self.assertNotIn("color", parsed.attributes)
+
+    def test_jewelry_dimension_not_mistaken_for_garment_size(self) -> None:
+        # Raw catalog text labels a physical measurement the same way it
+        # labels a real size ("Size: N") -- a unit marker right after the
+        # number distinguishes a dimension/gauge from a real garment size.
+        for message in [
+            "Size: 2.5'' in length weight 0.2oz a pair",
+            'Waist Size:25.2", Hip Size:54.8"',
+            "hoop ring size: 14 gauge (ring thickness)",
+        ]:
+            with self.subTest(message=message):
+                parsed = self.parser.parse(message)
+                self.assertNotIn("size", parsed.attributes)
+
+    def test_real_garment_size_still_extracted(self) -> None:
+        for message, expected in [("Black Size 10", "10"), ("size 9", "9")]:
+            with self.subTest(message=message):
+                parsed = self.parser.parse(message)
+                self.assertEqual(parsed.attributes.get("size"), expected)
+
+    def test_negation_does_not_cross_clause_boundary(self) -> None:
+        # A negation earlier in the sentence must not suppress a genuinely
+        # positive, unrelated mention in a later clause.
+        parsed = self.parser.parse("I don't want polyester, I love cotton")
+        self.assertEqual(parsed.attributes.get("material"), "cotton")
+
     def test_no_structured_attribute_is_vague_even_without_pattern(self) -> None:
         # No uncertainty phrase here, but nothing structured was extracted
         # either (only the loose `feature` catch-all) -- still vague.

@@ -58,6 +58,16 @@ SIZE_LETTER_RE = re.compile(r"\bsize[:\s]*(x{0,3}s|x{0,3}l|m)\b", re.I)
 SIZE_BARE_LETTER_RE = re.compile(r"\b(xxs|xs|small|medium|large|xl|xxl|xxxl)\b", re.I)
 SIZE_WIDTH_RE = re.compile(r"\b(wide|narrow|regular)\s*width\b", re.I)
 SIZE_PHRASES = ("one size", "big and tall")
+# Raw catalog text labels physical dimensions the same way it labels a real
+# garment/shoe size -- both literally say "Size: N" -- e.g. an earring's
+# "Size: 2.5'' in length" vs a shoe's "Size 10". Checked against
+# data/catalog.jsonl: a unit marker immediately after the number reliably
+# separates the two (886 dimension/measurement-chart cases with a marker,
+# 5486 real garment/shoe sizes without one). No customer says "size 9
+# inches" for a shoe, so this costs nothing on genuine size disclosures.
+SIZE_UNIT_MARKER_RE = re.compile(
+    r"^\s*(?:''|\"|in\b|inch|cm\b|mm\b|oz\b|ounce|lbs?\b|pound|ft\b|feet|gauge)", re.I
+)
 
 BUDGET_RE = re.compile(
     r"(?:under|below|less than|no more than|around|about|budget(?: of| around)?)?\s*\$\s?(\d+(?:\.\d{1,2})?)",
@@ -99,6 +109,17 @@ USE_CASE_KEYWORDS = (
     "basketball", "climbing", "skiing", "hunting", "soccer", "football",
     "boating", "snowboarding", "pilates",
 )
+
+# Checked in a small window immediately before a candidate match (not
+# whole-message) so "I don't want polyester, I love cotton" suppresses only
+# "polyester", not "cotton" too. See parser._is_negated.
+NEGATION_CUES = (
+    "don't want", "do not want", "dont want", "don't like", "do not like",
+    "not looking for", "anything but", "nothing with", "without", "avoid",
+    "except", "can't stand", "cant stand", "hate", "dislike", "no", "not",
+    "non", "anti",
+)
+NEGATION_WINDOW = 30
 
 OVERRIDE_PATTERNS = (
     "actually", "instead", "ignore my earlier", "ignore that", "scratch that",
