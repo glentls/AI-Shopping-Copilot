@@ -1,60 +1,30 @@
-"""Conversation state -> ranked candidates.
-
-LANE B OWNS THIS PACKAGE. This is a working BM25-only placeholder lifted from
-the starter so the skeleton runs end to end and reproduces the published
-baseline. Lane B replaces it with BM25 + ONNX dense retrieval + slot matching,
-fused by reciprocal rank fusion.
-
-Two rules that hold for every implementation in here:
-  1. Never hard-filter. Score and rank only. 15% of sessions retract a
-     constraint on turn 3 or 4, and a filter built on a since-retracted
-     constraint has already deleted the right answer permanently.
-  2. Always return a full top_k. An empty slot is a wasted free chance at a hit.
-"""
+"""Conversation state to hybrid-retrieval candidates."""
 
 from __future__ import annotations
 
-import json
 import os
 import re
-import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from src.attributes import AttributeTable
 from src.contracts import SLOTS, Candidate, ConversationState
-from src.lexicons import NO_PREFERENCE_RE
+from src.lexicons import NO_PREFERENCE_RE, OVERRIDE_CUES
 
-TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-# How many BM25 places one matched slot is worth. Tuned on the public set;
-# sweep with TJ_SLOT_WEIGHT. Weighted too hard (the first version let the slot
-# bonus outrank BM25 outright) a coarse lexicon match drags junk to the top and
-# the score drops ~0.05.
-SLOT_WEIGHT = float(os.environ.get("TJ_SLOT_WEIGHT", "3.0"))
-
-STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
-    "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
-    "that", "the", "this", "to", "want", "with", "would", "you", "looking",
-    "still", "exploring", "need", "key", "requirement", "have", "preference",
-}
+from .blend import reciprocal_rank_fusion, rerank_candidates
+from .bm25 import ARTIFACT_NAME as BM25_ARTIFACT, BM25Index, build_bm25_index
+from .dense import DenseIndex
 
 
-def _text(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, dict):
-        return " ".join(f"{key} {item}" for key, item in value.items())
-    if isinstance(value, list):
-        return " ".join(str(item) for item in value)
-    return str(value)
-
-
-def _terms(text: str) -> list[str]:
-    return [
-        token.lower()
-        for token in TOKEN_RE.findall(text)
-        if len(token) > 1 and token.lower() not in STOPWORDS
-    ]
+_EXACT_CLAUSE_RE = re.compile(
+    r"(?:key requirement is|what matters is|what i need is)\s*:\s*(.+)", re.IGNORECASE
+)
+_GENERIC_ONLY_RE = re.compile(
+    r"^(?:those options are not quite right yet|ask me about (?:one |a )?specific attribute|"
+    r"i(?:'m| am) still exploring|nothing else|no idea)[.! ]*$",
+    re.IGNORECASE,
+)
+_OVERRIDE_RE = re.compile("|".join(re.escape(cue) for cue in OVERRIDE_CUES), re.IGNORECASE)
 
 
 class Retriever:
@@ -67,91 +37,182 @@ class Retriever:
         self.catalog_path = Path(catalog_path)
         self.artifacts_dir = Path(artifacts_dir)
         self.table = table
-        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
-        self._build_index()
-
-    def _build_index(self) -> None:
-        cursor = self.connection.cursor()
-        cursor.execute(
-            "CREATE VIRTUAL TABLE products USING fts5("
-            "parent_asin UNINDEXED, title, categories, features, details, store, description, "
-            "tokenize='unicode61 remove_diacritics 2')"
+        bm25_path = self.artifacts_dir / BM25_ARTIFACT
+        if not bm25_path.exists():
+            # Useful for unit tests and tiny custom catalogs. A real 50k
+            # deployment should always run tools.build_index ahead of time.
+            build_bm25_index(self.catalog_path, self.artifacts_dir)
+        self.bm25 = BM25Index(bm25_path)
+        self.metadata, self.fallback = self.bm25.metadata()
+        self._profile_cache: dict[tuple[str, ...], dict[str, int]] = {}
+        self.mode = os.environ.get("TJ_RETRIEVAL_MODE", "fused").strip().lower()
+        if self.mode not in {"bm25", "dense", "fused"}:
+            self.mode = "fused"
+        try:
+            self.dense = None if self.mode == "bm25" else DenseIndex(self.artifacts_dir)
+        except (FileNotFoundError, ImportError, ValueError):
+            self.dense = None
+        self._route_executor = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="dense-retrieval")
+            if self.dense is not None and self.mode in {"dense", "fused"}
+            else None
         )
-        batch: list[tuple[str, ...]] = []
-        with self.catalog_path.open(encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                product = json.loads(line)
-                batch.append((
-                    str(product["parent_asin"]),
-                    _text(product.get("title")),
-                    _text(product.get("categories")),
-                    _text(product.get("features")),
-                    _text(product.get("details")),
-                    _text(product.get("store")),
-                    _text(product.get("description")),
-                ))
-                if len(batch) >= 1000:
-                    cursor.executemany("INSERT INTO products VALUES (?,?,?,?,?,?,?)", batch)
-                    batch.clear()
-        if batch:
-            cursor.executemany("INSERT INTO products VALUES (?,?,?,?,?,?,?)", batch)
-        self.connection.commit()
 
     @staticmethod
     def _informative(text: str) -> bool:
-        """Drop replies that carry no preference.
+        """Reject replies that communicate no product preference."""
+        cleaned = " ".join((text or "").strip().split())
+        return (
+            bool(cleaned)
+            and not NO_PREFERENCE_RE.search(cleaned)
+            and not _GENERIC_ONLY_RE.match(cleaned)
+        )
 
-        "I don't have an additional preference for brand." is not signal, and
-        left in the transcript its words go straight into the query and pull
-        the ranking around. Every wasted question costs a turn AND pollutes
-        retrieval for every turn after it.
-        """
-        return not NO_PREFERENCE_RE.search(text)
+    @staticmethod
+    def _without_excluded(text: str, state: ConversationState) -> str:
+        for slot in SLOTS:
+            for value in state.slots.get(slot, []):
+                if value.polarity or not value.value:
+                    continue
+                text = re.sub(rf"\b{re.escape(value.value)}\b", " ", text, flags=re.IGNORECASE)
+        return text
 
-    def _query_text(self, state: ConversationState) -> str:
-        """Everything informative the customer has said, plus live slot values."""
-        said = " ".join(
+    def _semantic_query_text(self, state: ConversationState) -> str:
+        """Current intent only, suitable for semantic retrieval."""
+        messages = [
             text for role, text in state.history
             if role == "customer" and self._informative(text)
+        ]
+        # Once the customer says to ignore an earlier preference, raw history
+        # before that point is unsafe. Preserve the initial category clause,
+        # then use the override and everything learned after it.
+        override_at = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if _OVERRIDE_RE.search(messages[index])
+            ),
+            None,
         )
-        values = " ".join(v for slot in SLOTS for v in state.active(slot))
-        return f"{said} {values}"
+        if override_at is not None and override_at > 0:
+            category_clause = messages[0].split(".", 1)[0]
+            messages = [category_clause, *messages[override_at:]]
+        said = " ".join(messages)
+        said = self._without_excluded(said, state)
+        live_values = " ".join(
+            value.value
+            for slot in SLOTS
+            for value in state.slots.get(slot, [])
+            if value.polarity and slot != "budget"
+        )
+        return " ".join(f"{said} {live_values}".split())
+
+    def _query_text(self, state: ConversationState) -> str:
+        """All informative lexical evidence plus the current live slots.
+
+        Exact catalog words disclosed earlier remain useful BM25 evidence even
+        after an override. Contradicted values affect the soft slot reranker;
+        they never hard-delete an otherwise strong lexical candidate.
+        """
+        said = " ".join(
+            text
+            for role, text in state.history
+            if role == "customer" and self._informative(text)
+        )
+        live_values = " ".join(
+            value.value
+            for slot in SLOTS
+            for value in state.slots.get(slot, [])
+            if value.polarity and slot != "budget"
+        )
+        return " ".join(f"{said} {live_values}".split())
+
+    @staticmethod
+    def _exact_phrases(state: ConversationState) -> list[str]:
+        phrases: list[str] = []
+        messages = [
+            text for role, text in state.history
+            if role == "customer" and Retriever._informative(text)
+        ]
+        override_at = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if _OVERRIDE_RE.search(messages[index])
+            ),
+            None,
+        )
+        if override_at is not None:
+            messages = messages[override_at:]
+        for text in messages:
+            match = _EXACT_CLAUSE_RE.search(text)
+            if not match:
+                continue
+            phrases.extend(
+                part.strip(" .")
+                for part in match.group(1).split(";")
+                if part.strip(" .")
+            )
+        return phrases
 
     def search(self, state: ConversationState, top_n: int = 300) -> list[Candidate]:
-        terms = list(dict.fromkeys(_terms(self._query_text(state))))[:40]
-        if not terms:
+        top_n = max(10, min(int(top_n), len(self.metadata))) if self.metadata else 0
+        if top_n <= 0:
             return []
-        expression = " OR ".join(f'"{term}"' for term in terms)
-        rows = self.connection.execute(
-            "SELECT parent_asin, bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) AS rank "
-            "FROM products WHERE products MATCH ? ORDER BY rank LIMIT ?",
-            (expression, top_n),
-        ).fetchall()
-        return [
-            Candidate(parent_asin=str(asin), score=-float(rank), components={"bm25": -float(rank)})
-            for asin, rank in rows
+        lexical_query = self._query_text(state)
+        semantic_query = self._semantic_query_text(state)
+        route_limit = max(300, top_n)
+        exact_phrases = self._exact_phrases(state)
+        informative_messages = [
+            text.lower() for role, text in state.history
+            if role == "customer" and self._informative(text)
         ]
+        generic_browsing = bool(informative_messages) and all(
+            "still exploring" in text for text in informative_messages
+        )
+
+        dense_future = (
+            self._route_executor.submit(self.dense.search, semantic_query, route_limit)
+            if self._route_executor is not None
+            else None
+        )
+        bm25_hits = (
+            self.bm25.search(lexical_query, route_limit)
+            if self.mode in {"bm25", "fused"}
+            else []
+        )
+        dense_hits = dense_future.result() if dense_future is not None else []
+        exact_hits = (
+            self.bm25.exact_search(exact_phrases, route_limit)
+            if self.mode == "fused"
+            else []
+        )
+        tags = state.user_profile.get("preference_tags", []) if state.user_profile else []
+        if not isinstance(tags, list):
+            tags = []
+        tag_key = tuple(sorted({str(tag).strip().lower() for tag in tags if str(tag).strip()}))
+        if tag_key not in self._profile_cache:
+            self._profile_cache[tag_key] = self.bm25.profile_ranks(tag_key)
+        profile_ranks = self._profile_cache[tag_key]
+        return reciprocal_rank_fusion(
+            bm25_hits,
+            dense_hits,
+            exact_hits,
+            profile_ranks,
+            self.metadata,
+            self.fallback,
+            top_n,
+            # Natural requests need dense-only candidates to clear the BM25
+            # pool. Verbatim catalog clauses are already high-confidence
+            # lexical evidence, so they do not need a semantic contribution.
+            # Generic browsing remains a light semantic hedge.
+            dense_weight=(
+                0.0 if exact_phrases else (0.10 if generic_browsing else 1.0)
+            ),
+        )
 
     def rerank(self, cands: list[Candidate], state: ConversationState) -> list[Candidate]:
-        """Soft slot boost on top of BM25 order. Never removes a candidate."""
-        for position, candidate in enumerate(cands):
-            bonus = 0.0
-            for slot in SLOTS:
-                held = set(self.table.values(candidate.parent_asin, slot))
-                if not held:
-                    continue
-                for value in state.active(slot):
-                    if value in held:
-                        bonus += 1.0
-                for value in state.excluded(slot):
-                    if value in held:
-                        bonus -= 1.5
-            candidate.components["slot"] = bonus
-            # Gentle: a matched slot is worth a few places, not the whole
-            # ranking. Weighted too hard, a coarse lexicon match ("leather"
-            # hits thousands of products) drags junk over a good BM25 result.
-            candidate.score = -position + bonus * SLOT_WEIGHT
-        cands.sort(key=lambda c: c.score, reverse=True)
-        return cands
+        return rerank_candidates(cands, state, self.table, self.metadata)
+
+
+__all__ = ["Retriever"]
