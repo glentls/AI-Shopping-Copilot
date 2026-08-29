@@ -74,7 +74,7 @@ LEAD_LINES = (
 LLM_HOOK = os.environ.get("TJ_LLM_MESSAGE")
 
 
-def _join(items: list[str]) -> str:
+def _join(items: list[str], conjunction: str = "or") -> str:
     # An empty join is a real case: an override can re-state a value we already
     # hold, which folds rather than re-learns and leaves nothing to name. The
     # evaluator scores a raised exception as a MISS, so this returns "" and
@@ -84,8 +84,8 @@ def _join(items: list[str]) -> str:
     if len(items) == 1:
         return items[0]
     if len(items) == 2:
-        return f"{items[0]} and {items[1]}"
-    return f"{', '.join(items[:-1])}, or {items[-1]}"
+        return f"{items[0]} {conjunction} {items[1]}"
+    return f"{', '.join(items[:-1])}, {conjunction} {items[-1]}"
 
 
 def _last_customer(state: ConversationState) -> str:
@@ -95,13 +95,28 @@ def _last_customer(state: ConversationState) -> str:
     return ""
 
 
+def _phrase(slot: str, value: str) -> str:
+    """Render a slot value the way a person would say it back.
+
+    Budget is stored as a bare number, so echoing it raw produces "Got it --
+    waterproof, comfortable and 80", which is the kind of line a judge
+    remembers for the wrong reason.
+    """
+    if slot == "budget":
+        return f"under ${value}"
+    return value
+
+
 def _new_values(state: ConversationState) -> list[str]:
     """What this turn's message taught us, in slot order, deduplicated."""
     seen: list[str] = []
-    for values in state.slots.values():
+    for slot, values in state.slots.items():
         for value in values:
-            if value.turn == state.turn and value.polarity and value.value not in seen:
-                seen.append(value.value)
+            if value.turn != state.turn or not value.polarity:
+                continue
+            phrased = _phrase(slot, value.value)
+            if phrased not in seen:
+                seen.append(phrased)
     return seen
 
 
@@ -130,10 +145,10 @@ def _opening(state: ConversationState) -> str:
             for value in values
             if value.polarity
         ]
-        focus = _join(_dedupe(learned + asserted)[:2]) or "the new requirement"
+        focus = _join(_dedupe(learned + asserted)[:2], "and") or "the new requirement"
         dropped = _dropped(state)
         if dropped:
-            return f"Understood — I have dropped {_join(dropped[:2])} and I am going by {focus} now."
+            return f"Understood — I have dropped {_join(dropped[:2], 'and')} and I am going by {focus} now."
         return f"Understood — {focus} it is, and I have set the earlier preference aside."
 
     if NO_PREFERENCE_RE.search(message):
@@ -153,7 +168,7 @@ def _opening(state: ConversationState) -> str:
         )
 
     if learned:
-        return f"Got it — {_join(learned[:3])}."
+        return f"Got it — {_join(learned[:3], 'and')}."
 
     if state.turn == 1:
         return "Happy to help — let me start with a few options."

@@ -294,6 +294,24 @@ class TestMessage(unittest.TestCase):
         text = compose_message(state, make_candidates(), "other", [])
         self.assertNotIn("stop asking", text)
 
+    def test_budget_is_spoken_not_echoed_raw(self):
+        """Budget is stored as a bare number. "Got it -- comfortable and 80"
+        is the kind of line a judge remembers for the wrong reason."""
+        state = make_state()
+        say(state, "something comfortable under $80", 1, asked="other")
+        text = compose_message(state, make_candidates(), "other", [])
+        self.assertIn("under $80", text)
+        self.assertNotIn(", and 80", text)
+
+    def test_acknowledgement_lists_with_and_not_or(self):
+        """These are things the customer HAS said, not alternatives on offer."""
+        state = make_state()
+        say(state, "waterproof, comfortable, cotton", 1, asked="other")
+        text = compose_message(state, make_candidates(), "other", [])
+        opening = text.split(".")[0]
+        self.assertIn(" and ", opening)
+        self.assertNotIn(", or ", opening)
+
     def test_never_raises_on_a_bare_state(self):
         for message in ("", "hello", "Actually, ignore that.", "You decide."):
             state = make_state()
