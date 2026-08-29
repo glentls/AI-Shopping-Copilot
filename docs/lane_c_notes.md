@@ -14,17 +14,20 @@ python3 -m tools.bench --verify   # replay loop still matches the evaluator
 
 | | score | hit@10 | MRR | MTTC | mean turns to first hit |
 |---|---|---|---|---|---|
-| **overall** | **0.7474** | 0.865 | 0.551 | 3.52 | **2.35** |
-| buying (80) | 0.7413 | 0.863 | 0.509 | 3.14 | 1.88 |
-| browsing (80) | 0.7478 | 0.863 | 0.550 | 3.42 | 2.22 |
-| intent_override (30) | 0.7428 | 0.867 | 0.607 | 4.63 | 3.65 |
-| boundary (10) | 0.8080 | 0.900 | 0.727 | 4.00 | 3.22 |
+| **overall** | **0.8370** | 0.985 | 0.611 | 2.93 | **2.81** |
+| buying (80) | 0.8255 | 0.975 | 0.562 | 2.52 | 2.31 |
+| browsing (80) | 0.8532 | 1.000 | 0.626 | 2.73 | 2.73 |
+| intent_override (30) | 0.8043 | 0.967 | 0.628 | 4.37 | 4.14 |
+| boundary (10) | 0.8980 | 1.000 | 0.827 | 3.50 | 3.50 |
 
-First-hit turns: 22 sessions on turn 1, 87 on turn 2, 45 on turn 3, 19 on turn
-4, 27 never. Rank 1 on 87 of the 173 hits.
+Baseline on entry was 0.7483. First-hit turns: 22 on turn 1, 87 on turn 2, 45 on
+turn 3, 27 on turn 4, then 16 across turns 5-10 that the old agent could never
+have reached. Only 3 sessions miss, and all 3 are retrieved -- they just run out
+of turns. Rank 1 on 96 of the 197 hits, which is where the remaining headroom is.
 
-Baseline on entry was 0.7483. The 0.0009 difference is one deliberate trade,
-explained under *Repeats* below; hit rate and MTTC are unchanged.
+Mean turns-to-hit rose 2.35 -> 2.81 on purpose: the sessions paging rescues are
+by definition late ones, and trading a slower average for 24 extra hits is worth
+it at 0.50 hit-rate weight against 0.20 efficiency.
 
 `intent_override` MTTC cannot go below ~3.5 by construction: the evaluator only
 counts a hit once `override_applied` is true, which happens on turn 3 or 4, so
@@ -120,9 +123,9 @@ was doing real work (override MRR 0.626 → 0.607). **The principled recovery is
 for `rerank` to weight by `SlotValue.confidence`, which it currently ignores** —
 see the handoff below.
 
-## Two findings that need another lane
+## Findings
 
-**1. Six dead turns. Worth +0.079, needs three lines in `starter/agent.py`.**
+**1. Six dead turns. Landed: +0.0896.**
 
 No session on the public set has *ever* hit after turn 4. The simulator holds at
 most four constraint strings and discloses two per answer, so the state is
@@ -150,24 +153,40 @@ do not count a hit until the override lands on turn 3 or 4, and naive paging has
 already scrolled past the target by then. Start-turn sweep: 3 → 0.8147,
 4 → 0.8370, 6 → 0.7908, 8 → 0.7675.
 
-The policy side is written and tested: `question.recommendation_window(state)`
-returns the rank offset and holds at 0 until the customer has been silent twice,
-so a slow discloser is never scrolled past. Wiring it is a slice in
-`starter/agent.py`, which Lane C does not own:
+`question.recommendation_window(state)` returns the rank offset and holds at 0
+while the customer is still disclosing, so a slow discloser is never scrolled
+past. The wiring is now in `starter/agent.py`:
 
 ```python
 offset = recommendation_window(state, top_k)
 ranked = [c.parent_asin for c in candidates[offset:offset + top_k]]
 ```
 
-No Lane B change is needed — `search()` already returns 300 candidates and
-`rerank()` keeps them all, so there is a deep list to page through today. This
-is purely the `agent.py` slice, which one person lands on main.
+**`starter/agent.py` is the shared wiring file and Lane C does not normally
+touch it.** This was raised first and landed only on explicit instruction; treat
+it as a merge point when branches come together. No Lane B change was needed —
+`search()` already returns 300 candidates and `rerank()` keeps them all.
 
-**2. `rerank` should weight by `SlotValue.confidence`.** It currently adds a
-flat 1.0 per matched live value, so the state cannot express that one constraint
-matters more than another — which is exactly what an override is telling us.
-Worth ~0.02 MRR on the override sessions.
+**2. `rerank` should weight by `SlotValue.confidence` (Lane B, open).** It adds
+a flat 1.0 per matched live value, so the state cannot express that one
+constraint matters more than another — which is exactly what an override is
+telling us. Worth ~0.02 MRR on the override sessions.
+
+**3. Ranking is now the whole game (Lane B, open).** In **200 of 200** sessions
+the target is retrieved inside the top 300 — recall is perfect and nothing is
+missing from the index. If the target ranked 1st whenever it is retrieved the
+score would be **0.9881**. With hit rate at 0.985, essentially all remaining
+headroom is MRR: only 96 of 197 hits land at rank 1.
+
+**4. The extractor understands about half of what customers say (Lane A,
+open).** `extract_slots` produces no slot value at all for 378 of 800 constraint
+strings in the evaluator's intent cards (52.8% coverage). `rayon` and `fabric`
+are in the evaluator's own `MATERIALS` list but missing from our material
+lexicon, and the evaluator inserts a matched material as the *first hard
+constraint*. Closures have no slot at all (`Pull On` 27, `Zipper` 16, `Button`
+11, `Drawstring` 6, `Buckle` 4, `Snap` 4), nor do care instructions (`Hand Wash
+Only` 18, `Machine Wash` 15). `Imported` (95) is genuinely meaningless and
+should stay unextracted.
 
 ## `tools/bench.py`
 

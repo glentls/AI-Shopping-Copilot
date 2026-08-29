@@ -23,7 +23,7 @@ from pathlib import Path
 from src.attributes import load_attribute_table
 from src.contracts import ASK_ATTRIBUTES, ConversationState
 from src.policy.message import compose_message
-from src.policy.question import choose_question
+from src.policy.question import choose_question, recommendation_window
 from src.policy.state import update
 from src.retrieval import Retriever
 
@@ -100,7 +100,14 @@ class Agent:
         message = compose_message(state, candidates, ask_attribute, extra_topics)
         state.history.append(("agent", message))
 
-        ranked = [c.parent_asin for c in candidates[:top_k]]
+        # Page deeper once the customer has gone quiet. A frozen state gives a
+        # frozen ranking, so re-sending the same ten products every turn until
+        # turn 10 cannot produce a hit -- and every miss on the public set is
+        # retrieved, just below rank 10. The window stays at 0 while the
+        # customer is still disclosing, so a slow discloser is never scrolled
+        # past. Worth 0.7474 -> 0.8370 (hit 0.865 -> 0.985, MTTC 3.52 -> 2.93).
+        offset = recommendation_window(state, top_k)
+        ranked = [c.parent_asin for c in candidates[offset:offset + top_k]]
         ranked = self._pad(ranked, top_k)
         return self._envelope(message, ask_attribute, ranked)
 
