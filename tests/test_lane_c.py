@@ -18,10 +18,8 @@ from src.contracts import Candidate, ConversationState
 from src.policy.message import compose_message
 from src.policy.question import (
     DECLINE_PATIENCE,
-    MIN_PAGE_TURN,
     choose_question,
     other_value,
-    recommendation_window,
     score_slots,
     wildcard_declines,
 )
@@ -94,6 +92,14 @@ class TestOverride(unittest.TestCase):
         say(state, "on reflection, cotton", 3)
         self.assertIn("cotton", state.active("material"))
         self.assertNotIn("cotton", state.excluded("material"))
+
+    def test_override_starts_a_fresh_recommendation_epoch(self):
+        state = make_state(shown_recommendations={"A001", "A002"})
+        say(state, "leather please", 1, asked="other")
+        self.assertEqual(state.shown_recommendations, {"A001", "A002"})
+
+        say(state, "Actually, ignore that — I need cotton instead", 2)
+        self.assertEqual(state.shown_recommendations, set())
 
 
 class TestRepeats(unittest.TestCase):
@@ -216,57 +222,6 @@ class TestWildcardPricing(unittest.TestCase):
         self.assertNotEqual(attribute, "other")
 
 
-class TestRecommendationWindow(unittest.TestCase):
-    """Not wired in -- see docs/lane_c_notes.md. Tested so the handoff is a
-    one-line slice in starter/agent.py rather than an untested idea."""
-
-    def test_holds_the_top_ten_while_the_customer_is_talking(self):
-        state = make_state()
-        say(state, "I need cotton boots", 1, asked="other")
-        for turn, message in enumerate(
-            ["waterproof", "in black", "slim fit", "for hiking", "under $80"], start=2
-        ):
-            say(state, message, turn, asked="other")
-        self.assertGreaterEqual(state.turn, MIN_PAGE_TURN)
-        self.assertEqual(recommendation_window(state), 0)
-
-    def test_never_pages_before_the_override_can_land(self):
-        """intent_override sessions do not COUNT a hit until turn 3 or 4, so
-        the top ten must still be on offer then. Paging early collapses that
-        scenario to hit 0.467 / MTTC 7.77."""
-        state = make_state()
-        say(state, "I'm looking for boots", 1, asked="other")
-        for turn in range(2, MIN_PAGE_TURN):
-            say(state, "I don't have an additional preference.", turn, asked="other")
-            self.assertEqual(recommendation_window(state), 0)
-
-    def test_an_override_is_not_a_silent_turn(self):
-        """The value an override names often folds into one we already hold,
-        so nothing is newly learned -- but the customer just changed course and
-        the ranking with it, so the top ten must be re-offered."""
-        state = make_state()
-        say(state, "I need a leather belt", 1, asked="other")
-        for turn in range(2, 6):
-            say(state, "I don't have an additional preference.", turn, asked="other")
-        self.assertGreater(recommendation_window(state), 0)
-
-        state = make_state()
-        say(state, "I need a leather belt", 1, asked="other")
-        for turn in range(2, 5):
-            say(state, "I don't have an additional preference.", turn, asked="other")
-        say(state, "Actually, ignore my earlier preference. What I need is: leather.",
-            5, asked="other")
-        self.assertEqual(recommendation_window(state), 0)
-
-    def test_pages_deeper_once_the_customer_goes_quiet(self):
-        state = make_state()
-        say(state, "I need cotton boots", 1, asked="other")
-        for turn in range(2, 7):
-            say(state, "I don't have an additional preference.", turn, asked="other")
-        self.assertGreater(recommendation_window(state), 0)
-        self.assertEqual(recommendation_window(state) % 10, 0)
-
-
 class TestMessage(unittest.TestCase):
     def test_acknowledges_only_what_this_turn_taught(self):
         state = make_state()
@@ -343,6 +298,12 @@ MINI_CATALOG = [
      "features": ["insulated", "wool"], "description": ["warm winter coat"],
      "details": {"Material": "wool"}, "categories": ["Clothing", "Coats"],
      "store": "Northline", "price": 200, "rating_number": 150},
+] + [
+    {"parent_asin": f"B{index:03}", "title": f"Generic Clothing Item {index}",
+     "features": ["everyday basic"], "description": ["general purpose clothing"],
+     "details": {}, "categories": ["Clothing"], "store": "Generic",
+     "price": 25 + index, "rating_number": index}
+    for index in range(4, 21)
 ]
 
 
@@ -392,6 +353,22 @@ class TestAgentContract(unittest.TestCase):
         self.agent.reset("s2", {})
         response = self.agent.respond("s2", "I'm still exploring.", 1, top_k=3)
         self.assertEqual(len(response["recommendations"]), 3)
+
+    def test_recommendations_do_not_repeat_within_an_intent(self):
+        self.agent.reset("s4", {})
+        seen: set[str] = set()
+        messages = [
+            "I'm looking for everyday clothing.",
+            "Something comfortable.",
+            "I don't have an additional preference for other.",
+            "Show me some more options.",
+        ]
+        for turn, message in enumerate(messages, start=1):
+            response = self.agent.respond("s4", message, turn, top_k=3)
+            current = {item["parent_asin"] for item in response["recommendations"]}
+            self.assertEqual(len(current), 3)
+            self.assertTrue(current.isdisjoint(seen))
+            seen.update(current)
 
     def test_override_moves_the_ranking(self):
         """The whole point of retraction: after an override the ranking must

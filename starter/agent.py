@@ -23,7 +23,7 @@ from pathlib import Path
 from src.attributes import load_attribute_table
 from src.contracts import ASK_ATTRIBUTES, ConversationState
 from src.policy.message import compose_message
-from src.policy.question import choose_question, recommendation_window
+from src.policy.question import choose_question
 from src.policy.state import update
 from src.retrieval import Retriever
 
@@ -78,10 +78,12 @@ class Agent:
             traceback.print_exc(file=sys.stderr)
             if DEBUG:
                 raise
+            ranked = self._pad([], top_k, state.shown_recommendations)
+            state.shown_recommendations.update(ranked)
             return self._envelope(
                 "Let me keep looking — could you tell me a bit more?",
                 "other",
-                self.fallback[:top_k],
+                ranked,
             )
 
     def _respond(self, state: ConversationState, user_message: str, turn: int, top_k: int) -> dict:
@@ -100,22 +102,30 @@ class Agent:
         message = compose_message(state, candidates, ask_attribute, extra_topics)
         state.history.append(("agent", message))
 
-        # Page deeper once the customer has gone quiet. A frozen state gives a
-        # frozen ranking, so re-sending the same ten products every turn until
-        # turn 10 cannot produce a hit -- and every miss on the public set is
-        # retrieved, just below rank 10. The window stays at 0 while the
-        # customer is still disclosing, so a slow discloser is never scrolled
-        # past. Worth 0.7474 -> 0.8370 (hit 0.865 -> 0.985, MTTC 3.52 -> 2.93).
-        offset = recommendation_window(state, top_k)
-        ranked = [c.parent_asin for c in candidates[offset:offset + top_k]]
-        ranked = self._pad(ranked, top_k)
+        # A continued scored session proves that every product already shown
+        # under this intent was a miss. Re-rank from the customer's latest
+        # evidence, then spend all ten slots on the best unseen candidates.
+        # state.update clears the exclusions when an intent override arrives,
+        # because pre-override recommendations were made for a different need.
+        ranked = [
+            candidate.parent_asin
+            for candidate in candidates
+            if candidate.parent_asin not in state.shown_recommendations
+        ][:top_k]
+        ranked = self._pad(ranked, top_k, state.shown_recommendations)
+        state.shown_recommendations.update(ranked)
         return self._envelope(message, ask_attribute, ranked)
 
-    def _pad(self, ranked: list[str], top_k: int) -> list[str]:
-        """Never return a short list -- an empty slot is a wasted free hit."""
+    def _pad(
+        self,
+        ranked: list[str],
+        top_k: int,
+        excluded: set[str] | None = None,
+    ) -> list[str]:
+        """Fill unused slots from the popularity prior without repeating."""
         if len(ranked) >= top_k:
             return ranked[:top_k]
-        seen = set(ranked)
+        seen = set(ranked) | (excluded or set())
         for asin in self.fallback:
             if len(ranked) >= top_k:
                 break

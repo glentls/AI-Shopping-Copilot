@@ -28,7 +28,6 @@ from typing import Optional
 
 from src.attributes import AttributeTable
 from src.contracts import Candidate, ConversationState
-from src.extract import detect_override
 from src.lexicons import NO_PREFERENCE_RE
 from src.policy.state import learned_on
 
@@ -82,12 +81,6 @@ GAIN_CAP = 4.0
 # Refusals of "anything else?" to sit through before giving up on the wildcard.
 # Must be at least 2: a boundary customer declines whatever we ask first.
 DECLINE_PATIENCE = int(os.environ.get("TJ_DECLINE_PATIENCE", "2"))
-
-# Earliest turn the reply may show anything but the top ten. An intent_override
-# session does not COUNT a hit until the override lands on turn 3 or 4, so the
-# top ten has to still be on offer then however quiet the customer has been.
-MIN_PAGE_TURN = int(os.environ.get("TJ_MIN_PAGE_TURN", "4"))
-
 
 def _entropy(counts: dict[str, int]) -> float:
     total = sum(counts.values())
@@ -217,42 +210,3 @@ def choose_question(
         return "other", [slot for slot, _ in ranked[:BUNDLE_SIZE - 1]]
 
     return ranked[0][0], [slot for slot, _ in ranked[1:BUNDLE_SIZE]]
-
-
-def recommendation_window(state: ConversationState, top_k: int = 10) -> int:
-    """Rank offset the next reply should show. NOT WIRED IN -- see notes.
-
-    Once the customer has stopped disclosing anything, the state is frozen, so
-    the ranking is frozen, so re-sending the same ten products every turn until
-    turn 10 cannot produce a hit. On the public set no session hits after turn 4
-    without this, while all 27 misses sit at rank 11-300 -- retrieved, just
-    never shown.
-
-    Measured with the wiring below applied: 0.7474 -> 0.8370, hit 0.865 ->
-    0.985, MTTC 3.52 -> 2.93, every scenario improving. Sweep the start turn
-    with TJ_MIN_PAGE_TURN; 3 gives 0.8147, 4 gives 0.8370, 6 gives 0.7908.
-
-    Both guards below are load-bearing. Without the override reset,
-    intent_override collapses to hit 0.467 / MTTC 7.77, because those sessions
-    do not COUNT a hit until the override lands and paging has already scrolled
-    past the target by then.
-
-    Wiring it needs one slice in starter/agent.py, which Lane C does not own:
-        offset = recommendation_window(state, top_k)
-        ranked = [c.parent_asin for c in candidates[offset:offset + top_k]]
-    Raised with the team rather than worked around; see docs/lane_c_notes.md.
-    """
-    if state.turn < MIN_PAGE_TURN:
-        return 0
-    said = [text for role, text in state.history if role == "customer"]
-    silent = 0
-    for turn in range(state.turn, 1, -1):
-        # An override is new information even when the value it names folds
-        # into one we already hold, so it must not read as a silent turn.
-        overrode = turn <= len(said) and bool(detect_override(said[turn - 1]))
-        if learned_on(state, turn) or overrode:
-            break
-        silent += 1
-    # Hold the top ten while the customer is still talking. Only page once they
-    # have gone quiet twice, so a slow discloser is never scrolled past.
-    return max(0, silent - 1) * top_k

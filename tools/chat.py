@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from src.policy.question import other_value, recommendation_window
+from src.policy.question import other_value
 from starter.agent import Agent
 
 BANNER = """
@@ -83,9 +83,7 @@ class Session:
               f"turn={self.turn}  {elapsed:.0f}ms]")
 
         asins = [item["parent_asin"] for item in response["recommendations"]]
-        offset = recommendation_window(self.state, self.top_k) if self.state else 0
-        window = f"  (showing ranks {offset + 1}-{offset + len(asins)})" if offset else ""
-        print(f"\n  recommendations{window}")
+        print("\n  recommendations  (new under the current intent)")
         for position, asin in enumerate(asins, start=1):
             mark = "  <-- TARGET" if asin == self.target else ""
             print(f"    {position:2}. {asin}  {self.titles.get(asin, '?')[:74]}{mark}")
@@ -134,8 +132,8 @@ class Session:
         print(f"\n    budget_max   {state.budget_max}")
         print(f"    asked        {state.asked}")
         print(f"    unanswerable {sorted(state.unanswerable)}")
-        print(f"    wildcard value {other_value(state):.2f}"
-              f"   page offset {recommendation_window(state, self.top_k)}")
+        print(f"    shown in current intent {len(state.shown_recommendations)}")
+        print(f"    wildcard value {other_value(state):.2f}")
 
     def show_why(self) -> None:
         state = self.state
