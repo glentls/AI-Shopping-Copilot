@@ -12,10 +12,7 @@ import unicodedata
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
-
-import numpy as np
-
+from typing import Any, Sequence
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_REVISION = "5641a7880f40ebf4035d05e60c5f9b7a9c272c84"
@@ -32,6 +29,31 @@ MAX_SEQUENCE_LENGTH = 128
 _BASE_URL = f"https://huggingface.co/{MODEL_NAME}/resolve/{MODEL_REVISION}"
 MODEL_URL = f"{_BASE_URL}/onnx/model.onnx?download=true"
 VOCAB_URL = f"{_BASE_URL}/vocab.txt?download=true"
+
+_NUMPY = None
+
+
+def _numpy(artifacts_dir: str | Path | None = None):
+    """Load NumPy only when the dense route is actually used.
+
+    The starter remains stdlib-only at import time. A clean judging machine can
+    therefore import and run the BM25 fallback without NumPy; the full artifact
+    build installs NumPy alongside ONNX Runtime under ``artifacts/_vendor``.
+    """
+    global _NUMPY
+    if _NUMPY is not None:
+        return _NUMPY
+    if artifacts_dir is not None:
+        vendor = str(_vendor_dir(artifacts_dir).resolve())
+        if vendor not in sys.path:
+            sys.path.insert(0, vendor)
+    try:
+        _NUMPY = importlib.import_module("numpy")
+    except ImportError as error:
+        raise ImportError(
+            "dense retrieval requires NumPy; BM25 fallback remains available"
+        ) from error
+    return _NUMPY
 
 
 @dataclass(frozen=True)
@@ -196,7 +218,8 @@ class WordPieceTokenizer:
 
     def encode_batch(
         self, texts: Sequence[str], max_length: int = MAX_SEQUENCE_LENGTH
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[Any, Any, Any]:
+        np = _numpy()
         encoded: list[list[int]] = []
         for text in texts:
             ids = [self.cls]
@@ -244,12 +267,14 @@ class OnnxSentenceEncoder:
         self.fallback_output = outputs[0].name
 
     @staticmethod
-    def _normalize(vectors: np.ndarray) -> np.ndarray:
+    def _normalize(vectors: Any) -> Any:
+        np = _numpy()
         vectors = np.asarray(vectors, dtype=np.float32)
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
         return vectors / np.maximum(norms, 1e-12)
 
-    def encode(self, texts: Sequence[str]) -> np.ndarray:
+    def encode(self, texts: Sequence[str]) -> Any:
+        np = _numpy()
         if not texts:
             return np.empty((0, EMBEDDING_DIMENSION), dtype=np.float32)
         input_ids, attention, token_types = self.tokenizer.encode_batch(texts)
@@ -295,6 +320,7 @@ def build_dense_index(
         raise RuntimeError(
             "onnxruntime is required to build dense artifacts; run python3 -m tools.build_index"
         )
+    np = _numpy(artifacts_dir)
     model_path, vocab_path = ensure_model_files(artifacts_dir)
     default_build_threads = min(4, os.cpu_count() or 1)
     build_threads = int(os.environ.get("TJ_ONNX_BUILD_THREADS", str(default_build_threads)))
@@ -372,6 +398,8 @@ class DenseIndex:
         )
         if runtime is None or not all(path.exists() for path in required):
             raise FileNotFoundError("dense artifacts or onnxruntime are unavailable")
+        np = _numpy(directory)
+        self._np = np
         self.asins = np.load(required[1], allow_pickle=False)
         # float32 BLAS is substantially faster than float16 on common CPUs.
         self.vectors = np.asarray(np.load(required[0], allow_pickle=False), dtype=np.float32)
@@ -380,6 +408,7 @@ class DenseIndex:
         self.encoder = OnnxSentenceEncoder(required[2], required[3], runtime)
 
     def search(self, query: str, limit: int) -> list[DenseHit]:
+        np = self._np
         if not query.strip() or limit <= 0 or not len(self.asins):
             return []
         query_vector = self.encoder.encode([query])[0]

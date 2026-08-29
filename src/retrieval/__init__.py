@@ -77,7 +77,8 @@ class Retriever:
                 text = re.sub(rf"\b{re.escape(value.value)}\b", " ", text, flags=re.IGNORECASE)
         return text
 
-    def _query_text(self, state: ConversationState) -> str:
+    def _semantic_query_text(self, state: ConversationState) -> str:
+        """Current intent only, suitable for semantic retrieval."""
         messages = [
             text for role, text in state.history
             if role == "customer" and self._informative(text)
@@ -98,6 +99,26 @@ class Retriever:
             messages = [category_clause, *messages[override_at:]]
         said = " ".join(messages)
         said = self._without_excluded(said, state)
+        live_values = " ".join(
+            value.value
+            for slot in SLOTS
+            for value in state.slots.get(slot, [])
+            if value.polarity and slot != "budget"
+        )
+        return " ".join(f"{said} {live_values}".split())
+
+    def _query_text(self, state: ConversationState) -> str:
+        """All informative lexical evidence plus the current live slots.
+
+        Exact catalog words disclosed earlier remain useful BM25 evidence even
+        after an override. Contradicted values affect the soft slot reranker;
+        they never hard-delete an otherwise strong lexical candidate.
+        """
+        said = " ".join(
+            text
+            for role, text in state.history
+            if role == "customer" and self._informative(text)
+        )
         live_values = " ".join(
             value.value
             for slot in SLOTS
@@ -138,7 +159,8 @@ class Retriever:
         top_n = max(10, min(int(top_n), len(self.metadata))) if self.metadata else 0
         if top_n <= 0:
             return []
-        query = self._query_text(state)
+        lexical_query = self._query_text(state)
+        semantic_query = self._semantic_query_text(state)
         route_limit = max(300, top_n)
         exact_phrases = self._exact_phrases(state)
         informative_messages = [
@@ -150,11 +172,15 @@ class Retriever:
         )
 
         dense_future = (
-            self._route_executor.submit(self.dense.search, query, route_limit)
+            self._route_executor.submit(self.dense.search, semantic_query, route_limit)
             if self._route_executor is not None
             else None
         )
-        bm25_hits = self.bm25.search(query, route_limit) if self.mode in {"bm25", "fused"} else []
+        bm25_hits = (
+            self.bm25.search(lexical_query, route_limit)
+            if self.mode in {"bm25", "fused"}
+            else []
+        )
         dense_hits = dense_future.result() if dense_future is not None else []
         exact_hits = (
             self.bm25.exact_search(exact_phrases, route_limit)
