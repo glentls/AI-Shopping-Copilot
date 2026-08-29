@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -83,6 +85,14 @@ class RetrieverTest(unittest.TestCase):
         leather = next(candidate for candidate in ranked if candidate.parent_asin == "P00")
         self.assertLess(leather.components["slot"], 0.0)
 
+    def test_slot_bonus_is_weighted_by_confidence(self) -> None:
+        state = ConversationState("session", {})
+        state.add("material", SlotValue("leather", 0.25, 1))
+        candidate = Candidate("P00", 0.0)
+        with patch.dict(os.environ, {"TJ_SLOT_WEIGHT": "12"}):
+            self.retriever.rerank([candidate], state)
+        self.assertAlmostEqual(candidate.components["slot"], 3.0)
+
     def test_query_hygiene_drops_filler_and_old_override_text(self) -> None:
         self.assertFalse(Retriever._informative("I don't have an additional preference for brand."))
         self.assertFalse(Retriever._informative("Those options are not quite right yet."))
@@ -93,7 +103,7 @@ class RetrieverTest(unittest.TestCase):
         ])
         state.add("material", SlotValue("leather", 0.9, 1, polarity=False))
         state.add("material", SlotValue("cotton", 0.9, 2))
-        query = self.retriever._query_text(state).lower()
+        query = self.retriever._semantic_query_text(state).lower()
         self.assertNotIn("leather", query)
         self.assertIn("cotton", query)
 
@@ -107,6 +117,56 @@ class RetrieverTest(unittest.TestCase):
             self.retriever.search(state, top_n=10)
             timings.append(time.perf_counter() - started)
         self.assertLess(max(timings), 0.050, timings)
+
+    def test_agent_import_does_not_require_numpy(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-S", "-c", "from starter.agent import Agent"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_agent_falls_back_to_bm25_without_numpy(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-c",
+                (
+                    "import sys; from starter.agent import Agent; "
+                    "agent = Agent(sys.argv[1], sys.argv[2]); "
+                    "assert agent.retriever.dense is None"
+                ),
+                str(self.catalog),
+                str(self.artifacts),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_skip_dense_build_does_not_require_numpy(self) -> None:
+        target = Path(self.temporary.name) / "skip-dense-artifacts"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-m",
+                "tools.build_index",
+                "--skip-dense",
+                "--catalog",
+                str(self.catalog),
+                "--artifacts",
+                str(target),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue((target / "bm25.sqlite3").exists())
 
 
 if __name__ == "__main__":

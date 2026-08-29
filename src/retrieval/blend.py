@@ -82,7 +82,7 @@ def rerank_candidates(
     metadata: Mapping[str, tuple[float | None, int]],
 ) -> list[Candidate]:
     """Move matches a few rank places and apply soft-only constraint penalties."""
-    slot_weight = _env_float("TJ_SLOT_WEIGHT", 3.0)
+    slot_weight = _env_float("TJ_SLOT_WEIGHT", 12.0)
     budget_weight = _env_float("TJ_BUDGET_WEIGHT", 2.0)
     tie_data: dict[str, tuple[float, float]] = {}
 
@@ -121,7 +121,8 @@ def rerank_candidates(
         candidate.components["slot"] = slot_contribution
         candidate.components["budget"] = budget_contribution
         # Base ordering is RRF. Slot and price contributions are expressed in
-        # rank places, making TJ_SLOT_WEIGHT=3 mean what its name promises.
+        # rank places, so the environment weights stay independent of raw
+        # BM25 and cosine score scales.
         candidate.score = -float(base_rank) + slot_contribution + budget_contribution
 
         if candidate.components.get("exact", 0.0) > 0:
