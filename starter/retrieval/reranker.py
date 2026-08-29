@@ -27,7 +27,7 @@ def rerank_candidates(
         product = store.get(asin)
         if product is None:
             continue
-        score = _score_product(product, phrases, terms, max_price)
+        score = _score_product(product, phrases, terms, max_price, filters.get("profile"))
         scored.append((score, -index, asin))
 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
@@ -39,6 +39,7 @@ def _score_product(
     phrases: list[str],
     terms: list[str],
     max_price: float | None,
+    profile: object = None,
 ) -> float:
     corpus = product.searchable_text.lower()
     score = 0.0
@@ -54,6 +55,11 @@ def _score_product(
 
     if max_price is not None and product.price is not None and product.price > max_price * 1.2:
         score -= PRICE_OUTLIER_PENALTY
+
+    if profile is not None:
+        from starter.personalization.rerank_boost import compute_profile_boost
+
+        score += compute_profile_boost(product, profile)
 
     return score
 

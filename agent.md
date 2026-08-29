@@ -20,11 +20,14 @@ We are building a **multi-turn shopping agent** that helps a simulated customer 
 
 | Owner | Module | Responsibility |
 |-------|--------|----------------|
-| Partner | `starter/dialog/` | **Pillar II:** session state, slot parsing, `ask_attribute` policy, intent override, boundary handling |
-| You | `starter/retrieval/` | **Pillar I:** BM25 index, metadata filters, buying/browsing routing, heuristic rerank |
-| Partner | `starter/agent.py` | Thin orchestrator wiring dialog → retrieval (~40 lines) |
+| Joseph | `starter/retrieval/` | **Pillar I:** BM25 index, metadata filters, buying/browsing retrieval paths, heuristic rerank |
+| JY | `starter/agent.py` | **Pillar II:** session state, slot parsing, `ask_attribute` policy, intent override, boundary handling |
+| Both | `starter/personalization/` | **Pillar III:** profile signals, context distillation hooks, adaptive question priority |
+| Both | `evaluator/` (read-only) | **Pillar IV:** measure Coverage / Precision / Efficiency via local evaluator |
 
-**Integration rule:** Only the partner edits `agent.py` glue after Day 1 PM. Retrieval and dialog logic stay in their respective modules.
+Full pillar notes: [docs/pillars.md](docs/pillars.md)
+
+**Integration rule:** Retrieval and dialog logic stay in their modules; `agent.py` wires them together.
 
 ---
 
@@ -162,21 +165,35 @@ Empty `{}` is valid on turn 1 — retrieval should still return broad matches.
 
 ---
 
-## 6. How We Address the Hackathon Pillars
+## 6. Official Hackathon Pillars (I–IV)
 
-| Prompt phrase | Module | Our implementation |
-|---------------|--------|-------------------|
-| Multi-route retrieval → ranking | `retrieval/` | BM25 keyword search + metadata filters + heuristic rerank (no LLM) |
-| Dynamic state machine | `dialog/` | `SessionState` with history, slots, override erasure, boundary refusals |
-| Proactive guidance | `dialog/` | Non-null `ask_attribute` every turn; `"other"` wildcard on browsing turn 1 |
-| Dual-track routing | `dialog/` + `retrieval/` | Mode detection in dialog; separate buying/browsing search paths in retrieval |
+See [docs/pillars.md](docs/pillars.md) for full notes. Summary:
+
+| Pillar | Official name | Our implementation |
+|--------|---------------|-------------------|
+| **I** | Multi-Route Retrieval → Ranking | `starter/retrieval/` — HybridSearcher, BM25, filters, reranker |
+| **II** | Dynamic State Machine | `starter/agent.py` — slots, intent routing, override/boundary, `ask_attribute` |
+| **III** | Self-Evolution: Dynamic Context Programming | History + profile distillation; feedback loop; `starter/personalization/` |
+| **IV** | Evaluation Matrix (Coverage / Precision / Efficiency) | Hit Rate@10, MRR, MTTC via `python3 -m evaluator.local_evaluator` |
+
+### Pillar III in one loop
+
+Each turn: accumulate history → distil into search context → retrieve → read `retrieval_feedback` → adapt next question (profile-adjusted priority). Strategy switches on buying/browsing and intent override.
+
+### Pillar IV metric weights
+
+```text
+TechnicalScore = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × Efficiency
+```
+
+Optimize **Coverage first** (50% weight), then **Precision** (MRR), then **Efficiency** (MTTC).
 
 ### What we are NOT building (3-day scope)
 
 - Paid LLM API calls or full model fine-tuning
 - External vector DB clusters (Pinecone, Milvus, etc.)
 - UI/frontend
-- Pillar III profile personalization (deferred)
+- Cross-session persistent memory beyond per-session `user_profile`
 
 ---
 
@@ -217,37 +234,45 @@ python3 -m evaluator.local_evaluator
 
 Output: aggregate metrics to stdout; full per-session breakdown in `results.json`. Check `scenario_metrics` after every significant change.
 
-### 3-day score targets
+### Score targets
 
-| Metric | Baseline | Target |
-|--------|----------|--------|
-| Hit Rate@10 | 0.125 | ≥ 0.20 |
-| MRR | 0.068 | ≥ 0.10 |
-| MTTC | 9.81 | ≤ 7.0 |
-| TechnicalScore | 0.107 | ≥ 0.18 |
+| Metric (Pillar IV) | Baseline | Current (~Pillar III) | Stretch |
+|--------|----------|-------------------------|---------|
+| Hit Rate@10 (Coverage) | 0.125 | **0.855** | ≥ 0.88 |
+| MRR (Precision) | 0.068 | **0.567** | ≥ 0.60 |
+| MTTC (Efficiency) | 9.81 | **4.21** | ≤ 4.0 |
+| TechnicalScore | 0.107 | **0.733** | ≥ 0.75 |
+
+### Manual testing (not just the evaluator)
+
+```bash
+# Unit tests (components)
+python3 -m unittest tests.test_retrieval tests.test_personalization tests.test_agent_routing -v
+
+# Full 200-session benchmark (Pillar IV)
+python3 -m evaluator.local_evaluator
+```
+
+Interactive demo and single-session replay patterns: [docs/pillars.md](docs/pillars.md#manual-testing-beyond-the-evaluator).
 
 ---
 
-## 9. Planned File Layout
-
-**Target architecture** (most modules not yet created):
+## 9. File Layout (current)
 
 ```text
 starter/
-  agent.py              # thin orchestrator
-  dialog/
-    __init__.py
-    session_state.py    # per-session history, slots, mode, refusals
-    slot_parser.py      # regex constraint extraction from user messages
-    question_policy.py  # ask_attribute selection
-  retrieval/
-    __init__.py
-    catalog_store.py    # FTS5 BM25 index + in-memory metadata cache
-    search.py           # HybridSearcher.search() entry point
-requirements.txt        # stdlib-only initially
+  agent.py                      Pillar II + III orchestration
+  retrieval/                    Pillar I (HybridSearcher, BM25, filters, reranker, feedback)
+  personalization/              Pillar III (profile_signals, rerank_boost, question_priority)
+tests/
+  test_retrieval.py
+  test_personalization.py
+  test_agent_routing.py
+  test_evaluator.py
+docs/
+  pillars.md                    Official Pillar I–IV notes + improvement matrix
+evaluator/local_evaluator.py    Pillar IV scorer (do not edit)
 ```
-
-**Currently exists:** only [starter/agent.py](starter/agent.py) (weak BM25 baseline).
 
 **Do not edit:** `evaluator/`, `data/public_set.jsonl`, organizer files.
 
@@ -263,9 +288,11 @@ Use this framing when writing Devpost or presenting:
 
 **Why our approach matters:**
 
-1. **Simulator-aware retrieval** — reranking boosts exact phrase overlap with disclosed constraints, not generic semantic similarity.
-2. **Intent-routed dual paths** — buying sessions use precision filters; browsing sessions use broad recall. Same dialog layer, different retrieval physics.
-3. **Offline-first** — no API keys, no network dependency, in-memory only. Deployable and aligned with competition constraints and final judging environment.
+1. **Simulator-aware retrieval (Pillar I)** — reranking boosts exact phrase overlap with disclosed constraints.
+2. **Intent-routed dual paths (Pillar I + II)** — buying = precision; browsing = broad recall.
+3. **Dynamic context programming (Pillar III)** — dialog history + profile distil into search context each turn; retrieval feedback adapts clarification strategy.
+4. **Evaluation-driven tuning (Pillar IV)** — optimize Coverage (Hit Rate), Precision (MRR), Efficiency (MTTC) on the public matrix.
+5. **Offline-first** — no API keys, in-memory only.
 
 **Honest positioning:** Many teams will use similar building blocks. Our edge is deliberate design for this task's information-revelation model, not the algorithm name.
 
@@ -313,7 +340,7 @@ When an AI assistant edits this repo, follow these rules:
 python3 -m evaluator.local_evaluator
 
 # Run unit tests
-python3 -m unittest tests.test_evaluator
+python3 -m unittest tests.test_retrieval tests.test_personalization tests.test_agent_routing tests.test_evaluator
 ```
 
 ### Key files

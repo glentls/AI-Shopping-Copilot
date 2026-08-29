@@ -29,6 +29,15 @@ def _parse_price(value: object) -> float | None:
         return None
 
 
+def _parse_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class ProductMeta:
     parent_asin: str
@@ -39,6 +48,8 @@ class ProductMeta:
     store: str
     description: str
     price: float | None
+    average_rating: float | None
+    rating_number: int | None
     searchable_text: str
 
 
@@ -83,6 +94,8 @@ class CatalogStore:
                     store=store,
                     description=description,
                     price=_parse_price(product.get("price")),
+                    average_rating=_parse_price(product.get("average_rating")),
+                    rating_number=_parse_int(product.get("rating_number")),
                     searchable_text=searchable_text,
                 )
                 batch.append((parent_asin, title, categories, features, details, store, description))

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+
+from starter.personalization import profile_adjusted_priority
 from starter.retrieval.search import HybridSearcher
 
 ATTRIBUTES = ("category", "material", "color", "size", "style", "brand", "budget", "feature", "use_case")
@@ -124,7 +126,7 @@ class Agent:
             return None
         missing = feedback.get("missing_attributes", [])
         priority = tuple(a for a in missing if a in ATTRIBUTES) if isinstance(missing, list) else ()
-        priority += ("category", "use_case", "budget", "size", "color", "material", "style", "brand", "feature")
+        priority = profile_adjusted_priority(priority, state["profile"])
         for attribute in priority:
             if state["slots"][attribute] is None and attribute not in state["unconstrained"] and attribute not in state["asked"]:
                 state["asked"].append(attribute)
@@ -145,8 +147,13 @@ class Agent:
         state = self._sessions[session_id]
         self._apply_message(state, user_message)
         self._route_intent(state, user_message)
-        filters = {**state["slots"], "slot_status": state["slot_status"],
-                   "unconstrained": state["unconstrained"], "asked": state["asked"]}
+        filters = {
+            **state["slots"],
+            "slot_status": state["slot_status"],
+            "unconstrained": state["unconstrained"],
+            "asked": state["asked"],
+            "profile": state["profile"],
+        }
         result = self.searcher.search(
             query_text=" ".join(state["history"]), mode=state["intent"],
             filters=filters, top_k=top_k,
