@@ -131,12 +131,24 @@ top-10 six times.
 
 Meanwhile **all 27 misses are retrieved** — none is missing from the index, they
 just sit below rank 10 (8 at rank 11–20, 11 at 21–50, 7 at 51–100, 1 deeper).
-Paging one window deeper per silent turn rescues 22 of them:
+Paging one window deeper per silent turn, **measured end to end** with the
+wiring below applied and then reverted:
 
 | | score | hit@10 | MRR | MTTC |
 |---|---|---|---|---|
 | today | 0.7474 | 0.865 | 0.551 | 3.52 |
-| paging turns 5–10 | **0.8271** | 0.975 | 0.600 | 3.02 |
+| with paging | **0.8370** | 0.985 | 0.611 | 2.93 |
+
+Every scenario improves: buying 0.863 → 0.975, browsing 0.863 → 1.000,
+intent_override 0.867 → 0.967, boundary 0.900 → 1.000.
+
+Two guards in `recommendation_window` are load-bearing, both found by measuring
+rather than reasoning. Paging must not start before turn `TJ_MIN_PAGE_TURN`
+(default 4), and an override must not read as a silent turn. Without the second
+guard, `intent_override` **collapses to hit 0.467 / MTTC 7.77** — those sessions
+do not count a hit until the override lands on turn 3 or 4, and naive paging has
+already scrolled past the target by then. Start-turn sweep: 3 → 0.8147,
+4 → 0.8370, 6 → 0.7908, 8 → 0.7675.
 
 The policy side is written and tested: `question.recommendation_window(state)`
 returns the rank offset and holds at 0 until the customer has been silent twice,
@@ -148,8 +160,9 @@ offset = recommendation_window(state, top_k)
 ranked = [c.parent_asin for c in candidates[offset:offset + top_k]]
 ```
 
-This needs Lane B to return more than `top_k` candidates, and someone to land
-the `agent.py` change. Flagged rather than worked around.
+No Lane B change is needed — `search()` already returns 300 candidates and
+`rerank()` keeps them all, so there is a deep list to page through today. This
+is purely the `agent.py` slice, which one person lands on main.
 
 **2. `rerank` should weight by `SlotValue.confidence`.** It currently adds a
 flat 1.0 per matched live value, so the state cannot express that one constraint

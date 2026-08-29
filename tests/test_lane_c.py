@@ -18,6 +18,7 @@ from src.contracts import Candidate, ConversationState
 from src.policy.message import compose_message
 from src.policy.question import (
     DECLINE_PATIENCE,
+    MIN_PAGE_TURN,
     choose_question,
     other_value,
     recommendation_window,
@@ -222,7 +223,39 @@ class TestRecommendationWindow(unittest.TestCase):
     def test_holds_the_top_ten_while_the_customer_is_talking(self):
         state = make_state()
         say(state, "I need cotton boots", 1, asked="other")
-        say(state, "waterproof and black", 2, asked="other")
+        for turn, message in enumerate(
+            ["waterproof", "in black", "slim fit", "for hiking", "under $80"], start=2
+        ):
+            say(state, message, turn, asked="other")
+        self.assertGreaterEqual(state.turn, MIN_PAGE_TURN)
+        self.assertEqual(recommendation_window(state), 0)
+
+    def test_never_pages_before_the_override_can_land(self):
+        """intent_override sessions do not COUNT a hit until turn 3 or 4, so
+        the top ten must still be on offer then. Paging early collapses that
+        scenario to hit 0.467 / MTTC 7.77."""
+        state = make_state()
+        say(state, "I'm looking for boots", 1, asked="other")
+        for turn in range(2, MIN_PAGE_TURN):
+            say(state, "I don't have an additional preference.", turn, asked="other")
+            self.assertEqual(recommendation_window(state), 0)
+
+    def test_an_override_is_not_a_silent_turn(self):
+        """The value an override names often folds into one we already hold,
+        so nothing is newly learned -- but the customer just changed course and
+        the ranking with it, so the top ten must be re-offered."""
+        state = make_state()
+        say(state, "I need a leather belt", 1, asked="other")
+        for turn in range(2, 6):
+            say(state, "I don't have an additional preference.", turn, asked="other")
+        self.assertGreater(recommendation_window(state), 0)
+
+        state = make_state()
+        say(state, "I need a leather belt", 1, asked="other")
+        for turn in range(2, 5):
+            say(state, "I don't have an additional preference.", turn, asked="other")
+        say(state, "Actually, ignore my earlier preference. What I need is: leather.",
+            5, asked="other")
         self.assertEqual(recommendation_window(state), 0)
 
     def test_pages_deeper_once_the_customer_goes_quiet(self):
