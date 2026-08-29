@@ -9,6 +9,11 @@ Public API:
     extract_attributes(message)       -> dict
 """
 
-from src.intent_router.router import detect_scenario, extract_attributes, parse_message
+from src.intent_router.router import (
+    build_search_key,
+    detect_scenario,
+    extract_attributes,
+    parse_message,
+)
 
-__all__ = ["detect_scenario", "extract_attributes", "parse_message"]
+__all__ = ["build_search_key", "detect_scenario", "extract_attributes", "parse_message"]

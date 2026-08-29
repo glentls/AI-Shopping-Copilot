@@ -25,3 +25,16 @@ def extract_attributes(message: str) -> dict:
     """
     parsed = parse_message(message)
     return {k: v for k, v in parsed.attributes.items() if k != "feature"}
+
+
+def build_search_key(session: dict) -> dict:
+    search_key: dict = {}
+    for attr, values in session["constraints"].items():
+        search_key[attr] = values
+    price_c = session.get("price_constraint")
+    if price_c:
+        if price_c["operator"] in ("<", "<=", "~"):
+            search_key["price"] = [{"lte": price_c["amount"]}]
+        else:
+            search_key["price"] = [{"gte": price_c["amount"]}]
+    return search_key
