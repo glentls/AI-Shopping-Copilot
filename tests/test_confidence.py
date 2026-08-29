@@ -5,7 +5,7 @@ import unittest
 
 from src.confidence.confidence import compute_confidence
 from src.confidence.fallback import safe_decide
-from src.confidence.ledger import SessionLedger
+from src.confidence.session_ledger import SessionLedger
 from src.confidence.policy import DEFAULT_THETA, TURN_CUTOFF, decide
 from src.reranker.types import RankResult
 

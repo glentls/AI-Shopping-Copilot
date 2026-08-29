@@ -14,7 +14,7 @@ decides the *question*.
 from __future__ import annotations
 
 from src.confidence.confidence import compute_confidence
-from src.confidence.ledger import SessionLedger
+from src.confidence.session_ledger import SessionLedger
 from src.confidence.payload import ConfidencePayload
 from src.reranker.types import RankResult
 

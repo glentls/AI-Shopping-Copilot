@@ -15,7 +15,7 @@ Public API:
 
 from src.confidence.confidence import compute_confidence
 from src.confidence.fallback import popularity_top10, safe_decide
-from src.confidence.ledger import SessionLedger
+from src.confidence.session_ledger import SessionLedger
 from src.confidence.payload import ConfidencePayload
 from src.confidence.policy import DEFAULT_THETA, always_ask, decide
 
