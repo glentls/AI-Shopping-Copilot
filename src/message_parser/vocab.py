@@ -27,6 +27,17 @@ MATERIALS = (
     "bamboo", "microfiber", "twill", "jersey", "terry", "flannel",
     "nubuck", "sherpa", "modal", "tulle", "sequin", "sheepskin",
     "neoprene", "ripstop",
+    # Jewelry/accessory materials + fabric-blend/technical-fabric terms --
+    # this catalog covers Jewelry as well as Clothing, and blends are common
+    # (all kept at >=80 occurrences in data/catalog.jsonl). Multi-word
+    # variants ordered before their shorter substring, same reasoning as
+    # STYLE_KEYWORDS below.
+    "stainless steel", "sterling silver", "cotton blend", "polyester blend",
+    "wool blend", "organic cotton", "pu leather", "faux suede",
+    "moisture wicking", "breathable mesh", "stretch fabric", "quick dry",
+    "gold plated", "cubic zirconia", "rubber", "metal", "crystal", "alloy",
+    "wood", "rhinestone", "pearl", "vinyl", "brass", "resin",
+    "titanium", "pvc", "cork", "platinum",
 )
 MATERIAL_RE = re.compile(r"\b(" + "|".join(re.escape(m) for m in MATERIALS) + r")\b", re.I)
 
@@ -37,6 +48,8 @@ COLORS = (
     "burgundy", "coral", "lavender", "mint", "multicolor", "multi-color",
     "rose gold", "sand", "stone", "aqua", "wine", "copper", "sapphire",
     "plum", "charcoal", "olive", "emerald", "bronze", "camel", "peach",
+    "light blue", "dark blue", "royal blue", "clear", "metallic",
+    "transparent", "neon", "nude", "two tone", "ombre",
 )
 COLOR_RE = re.compile(r"\b(" + "|".join(re.escape(c) for c in COLORS) + r")\b", re.I)
 
@@ -44,6 +57,7 @@ SIZE_NUMERIC_RE = re.compile(r"\bsize[:\s]*(\d{1,2}(?:\.\d)?)\b", re.I)
 SIZE_LETTER_RE = re.compile(r"\bsize[:\s]*(x{0,3}s|x{0,3}l|m)\b", re.I)
 SIZE_BARE_LETTER_RE = re.compile(r"\b(xxs|xs|small|medium|large|xl|xxl|xxxl)\b", re.I)
 SIZE_WIDTH_RE = re.compile(r"\b(wide|narrow|regular)\s*width\b", re.I)
+SIZE_PHRASES = ("one size", "big and tall")
 
 BUDGET_RE = re.compile(
     r"(?:under|below|less than|no more than|around|about|budget(?: of| around)?)?\s*\$\s?(\d+(?:\.\d{1,2})?)",
@@ -62,6 +76,19 @@ STYLE_KEYWORDS = (
     "zip-up", "zip up", "loose fit", "loose", "fitted", "straight leg",
     "skinny", "bootcut", "unisex", "chic", "retro", "plus size", "boho",
     "bohemian", "minimalist", "petite", "maternity", "streetwear",
+    # Pattern/print descriptors -- no dedicated "pattern" slot exists in the
+    # API contract's allowed attributes, so these live under style (a print
+    # is a visual style trait). Multi-word variants ordered before their
+    # shorter substring so e.g. "polka dot" wins over bare "polka" when a
+    # message matches both (see _all_keyword_hits: first hit is the value).
+    "polka dot", "polka", "leopard print", "leopard", "graphic print",
+    "graphic", "solid color", "solid", "tie dye", "tie-dye", "striped",
+    "stripe", "floral", "plaid", "camouflage", "camo", "paisley",
+    "embroidered", "printed",
+    # Shoe heel type/height -- no dedicated slot in the contract; a heel
+    # style is a shoe fit/style trait, same reasoning as pattern above.
+    "kitten heel", "block heel", "chunky heel", "wedge heel", "high heel",
+    "low heel", "stiletto", "platform", "wedge", "flat", "heel",
 )
 USE_CASE_KEYWORDS = (
     "running", "hiking", "gym", "workout", "yoga", "winter", "summer",
@@ -107,6 +134,13 @@ GENERIC_SINGLE_WORD_BLOCKLIST = {
     "options",
 }
 MIN_SINGLE_WORD_VOCAB_LEN = 4
+# Brand needs a stricter bar than category: this catalog is full of small
+# private-label sellers whose store name is coincidentally an ordinary
+# marketing adjective ("Comfy", "Sole", "Worth", "Match"), which show up
+# constantly in real Amazon feature/description text. A wrong brand guess
+# actively harms retrieval (excludes the right product); a missed real
+# short brand name is neutral (the raw word is still kept in `keywords`).
+MIN_SINGLE_WORD_BRAND_LEN = 6
 
 # Customers commonly type these as one merged word; catalog categories store
 # them space/hyphen-separated. Expanded into their constituent tokens before

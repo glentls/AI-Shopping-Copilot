@@ -12,6 +12,7 @@ from .vocab import (
     COMPOUND_ALIASES,
     GENERIC_SINGLE_WORD_BLOCKLIST,
     MATERIAL_RE,
+    MIN_SINGLE_WORD_BRAND_LEN,
     MIN_SINGLE_WORD_VOCAB_LEN,
     NO_PREFERENCE_PATTERNS,
     OVERRIDE_PATTERNS,
@@ -65,11 +66,14 @@ def _matches_any(lowered_text: str, patterns: tuple[str, ...]) -> bool:
     return any(pattern in lowered_text for pattern in patterns)
 
 
-def _first_keyword_hit(lowered_text: str, vocab: tuple[str, ...]) -> str | None:
-    for term in vocab:
-        if re.search(rf"\b{re.escape(term)}\b", lowered_text):
-            return term
-    return None
+def _all_keyword_hits(lowered_text: str, vocab: tuple[str, ...]) -> list[str]:
+    """All matching vocab terms, not just the first. The attribute value is
+    still just the first hit (single value per attribute), but every hit
+    must be claimed -- otherwise a second real match left unclaimed (e.g.
+    "outdoor" claimed as use_case but "work" not, from ".. Outdoor & Work
+    Snow & Cold Weather ..") stays free for a later, wrong classifier (e.g.
+    brand) to grab."""
+    return [term for term in vocab if re.search(rf"\b{re.escape(term)}\b", lowered_text)]
 
 
 def _match_compound_alias(
@@ -103,6 +107,7 @@ def _match_vocab_ngrams(
     vocab: set[str],
     claimed: set[str] | None = None,
     max_n: int = 4,
+    min_single_word_len: int = MIN_SINGLE_WORD_VOCAB_LEN,
 ) -> tuple[str, list[str]] | None:
     """Longest vocab phrase present in `tokens`. Returns (matched_vocab_term,
     original_tokens_matched) — callers must add the *original* tokens (not
@@ -114,8 +119,11 @@ def _match_vocab_ngrams(
     `claimed` tokens (already consumed by a higher-priority attribute) are
     skipped so an ambiguous term like "cotton" (a real material AND a real
     catalog category) isn't double-assigned. Single-word matches under
-    MIN_SINGLE_WORD_VOCAB_LEN or in the generic blocklist are skipped (some
-    real store names are plain English words, e.g. "Key", "Not")."""
+    `min_single_word_len` or in the generic blocklist are skipped (some real
+    store names are plain English words, e.g. "Key", "Not"). Windows whose
+    first/last token is a stopword are skipped too (real vocab terms don't
+    start/end mid-phrase like "the wave" from marketing copy, e.g. "... blue
+    and orange colors of the wave strand bracelet ...")."""
     claimed = claimed or set()
     n = len(tokens)
     for size in range(min(max_n, n), 0, -1):
@@ -123,8 +131,10 @@ def _match_vocab_ngrams(
             window = tokens[i : i + size]
             if any(t in claimed for t in window):
                 continue
+            if window[0] in STOPWORDS or window[-1] in STOPWORDS:
+                continue
             phrase = " ".join(window)
-            if size == 1 and (len(phrase) < MIN_SINGLE_WORD_VOCAB_LEN or phrase in GENERIC_SINGLE_WORD_BLOCKLIST):
+            if size == 1 and (len(phrase) < min_single_word_len or phrase in GENERIC_SINGLE_WORD_BLOCKLIST):
                 continue
             if phrase in vocab:
                 return phrase, window
@@ -223,15 +233,17 @@ class MessageParser:
         if budget:
             result.attributes["budget"] = budget.group(1)
 
-        style = _first_keyword_hit(lowered, STYLE_KEYWORDS)
-        if style:
-            result.attributes["style"] = style
-            claimed.update(style.split())
+        style_hits = _all_keyword_hits(lowered, STYLE_KEYWORDS)
+        if style_hits:
+            result.attributes["style"] = style_hits[0]
+            for hit in style_hits:
+                claimed.update(hit.split())
 
-        use_case = _first_keyword_hit(lowered, USE_CASE_KEYWORDS)
-        if use_case:
-            result.attributes["use_case"] = use_case
-            claimed.update(use_case.split())
+        use_case_hits = _all_keyword_hits(lowered, USE_CASE_KEYWORDS)
+        if use_case_hits:
+            result.attributes["use_case"] = use_case_hits[0]
+            for hit in use_case_hits:
+                claimed.update(hit.split())
 
         tokens = [t.lower() for t in TOKEN_RE.findall(lowered)]
 
@@ -250,7 +262,10 @@ class MessageParser:
 
         if self.known_brands:
             brand_match = _match_compound_alias(tokens, self.known_brands, claimed=claimed) \
-                or _match_vocab_ngrams(tokens, self.known_brands, claimed=claimed)
+                or _match_vocab_ngrams(
+                    tokens, self.known_brands, claimed=claimed,
+                    min_single_word_len=MIN_SINGLE_WORD_BRAND_LEN,
+                )
             if brand_match:
                 value, window = brand_match
                 result.attributes["brand"] = value

@@ -118,11 +118,14 @@ class MessageParserAttributeTest(unittest.TestCase):
 
 
 class CatalogVocabTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # Scanning the 50k-row catalog is the same regardless of test case;
+        # load once per class instead of once per test method.
+        cls.categories, cls.brands = load_catalog_vocab("data/catalog.jsonl")
+
     def setUp(self) -> None:
-        categories, brands = load_catalog_vocab("data/catalog.jsonl")
-        self.categories = categories
-        self.brands = brands
-        self.parser = MessageParser(known_categories=categories, known_brands=brands)
+        self.parser = MessageParser(known_categories=self.categories, known_brands=self.brands)
 
     def test_vocab_improves_category_and_brand_matching(self) -> None:
         self.assertIn("boots", self.categories)
@@ -168,6 +171,31 @@ class CatalogVocabTest(unittest.TestCase):
             with self.subTest(message=message):
                 parsed = self.parser.parse(message)
                 self.assertEqual(parsed.attributes.get("category"), expected)
+
+    def test_brand_distinctiveness_filters_generic_words(self) -> None:
+        # Real catalog quirk: "machine" is the literal store name for 1
+        # product but appears 10,975 times catalog-wide (almost always from
+        # "Machine Wash" care instructions) -- must not be trusted as brand.
+        # "skechers" is store name for 375 products and appears 388 times
+        # total -- a real, distinctive brand -- must be kept.
+        for noisy in ["machine", "waterproof", "simple", "seasons", "goddess"]:
+            self.assertNotIn(noisy, self.brands, f"{noisy!r} should be filtered as non-distinctive")
+        for real in ["skechers", "creepyparty", "efixtk"]:
+            self.assertIn(real, self.brands, f"{real!r} should survive as a distinctive brand")
+
+        parsed = self.parser.parse("Rubber sole; Skechers Go Walk 5 shoe is designed for comfort.")
+        self.assertEqual(parsed.attributes.get("brand"), "skechers")
+        parsed = self.parser.parse("Care instructions: Machine Wash, tumble dry low.")
+        self.assertNotIn("brand", parsed.attributes)
+
+    def test_leftover_use_case_keyword_not_leaked_as_brand(self) -> None:
+        # Real catalog quirk: "work" is a valid use_case keyword AND happens
+        # to be a literal (if non-distinctive) store name. Previously only
+        # the first use_case hit ("outdoor") was claimed, leaving "work"
+        # free for the brand matcher to grab.
+        parsed = self.parser.parse("I'm looking for Outdoor & Work Snow & Cold Weather gear.")
+        self.assertEqual(parsed.attributes.get("use_case"), "outdoor")
+        self.assertNotEqual(parsed.attributes.get("brand"), "work")
 
     def test_compound_alias_does_not_leak_fragment_as_brand(self) -> None:
         # "crossbody" expands toward "cross body" for category matching, but
