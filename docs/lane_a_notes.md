@@ -4,7 +4,7 @@
 
 Measurements use all 50,000 rows in `data/catalog.jsonl`. The “before” column
 is the thin skeleton measured immediately before the lexicon changes; the
-“after” column is artifact version 3 after removing the universal
+“after” column is artifact version 4 after removing the universal
 `Clothing, Shoes & Jewelry` taxonomy root.
 
 | Slot | Before | After |
@@ -16,7 +16,7 @@ is the thin skeleton measured immediately before the lexicon changes; the
 | style | 26.8% | 49.7% |
 | brand | 99.4% | 98.9% |
 | budget | 0.0% | 20.8% |
-| feature | 55.4% | 67.8% |
+| feature | 55.4% | 74.5% |
 | use_case | 51.5% | 56.9% |
 
 The brand decrease is intentional: `generic`, `unknown`, and other placeholder
@@ -24,8 +24,8 @@ stores no longer count as brands. Category coverage likewise excludes products
 whose only taxonomy value is the universal root. Budget coverage reflects the
 catalog's non-null numeric prices and must be used for soft ranking only.
 
-On the same machine, a clean build took 89.0 seconds and produced a 10 MB JSON
-artifact. Loading took 0.261 seconds. Across all nine slots, 25 repeated
+On the same machine, a clean build took 95.5 seconds and produced a 10 MB JSON
+artifact. Loading took 0.282 seconds. Across all nine slots, 25 repeated
 `distribution()` calls over 5,000 candidates had medians below 0.8 ms; the
 worst observed individual call was 1.58 ms.
 
@@ -34,6 +34,17 @@ The catalog-prose precision pass reduced `soft` from 11,411 to 11,167 products,
 47 negated `waterproof` matches and 32 negated `underwire` matches. On the
 public evaluator, this changed one result from rank 3 to rank 4: Hit Rate and
 MTTC were unchanged, while the technical score moved from 0.744030 to 0.743905.
+
+The closure pass maps pull-on, zipper, button, drawstring, buckle, and snap
+closures to `feature`. Its surface vocabulary is intentionally disjoint from
+style values such as `zip up`, `button down`, `pullover`, and `slip on`, with a
+test that checks the normalized vocabularies do not intersect. Bare `button`
+is not a closure signal, and prose-level `pull on` and `snap` require closure
+or product context. This covered 75 meaningful closure constraints in the
+public intent cards while leaving a decorative “button detail” unextracted.
+Against the rebased Lane C baseline, Hit Rate stayed at 0.9800 and MRR rose
+from 0.6245 to 0.6277; MTTC increased from 2.960 to 3.005, for a technical-score
+change from 0.8381 to 0.8382.
 
 Catalog confidence is based on the strongest source: store/price 1.00,
 structured details 0.99, taxonomy 0.98, title 0.95, features 0.82, and
@@ -80,7 +91,8 @@ these optional ranking signals without changing the frozen shared contract.
   windproof, wrinkle resistant, odor resistant, stain resistant, machine
   washable, easy care, reversible, packable, reflective, compression,
   seamless, wireless, underwire, removable padding, hypoallergenic, anti
-  tarnish, shock absorbing, steel toe, durable, soft.
+  tarnish, shock absorbing, steel toe, durable, soft, pull on closure, zipper
+  closure, button closure, drawstring closure, buckle closure, snap closure.
 
 - **use_case:** travel, hiking, running, walking, gym, yoga, cycling, work,
   casual, formal, wedding, party, outdoor, winter, summer, beach, sleep, school,
@@ -103,6 +115,10 @@ these optional ranking signals without changing the frozen shared contract.
 - Ambiguous prose-level `work` and `classic` matches require use-case/style
   context, and care instructions such as “use a soft cloth” do not tag the
   product as soft. These rules favor precision and can miss unusual wording.
+- Closure and style vocabularies are disjoint to prevent duplicate slot bonuses.
+  This intentionally treats `zip up` and `button down` as styles, while explicit
+  zipper and button closure language is a feature. Decorative button wording
+  and unconstrained prose uses of `snap` or `pull on` may be missed.
 - Short and polysemous terms remain risky: `small` can describe dimensions
   rather than a labeled size, `work` may appear as a verb, and names such as
   Columbia or Vans can be used non-commercially. Size matching is therefore

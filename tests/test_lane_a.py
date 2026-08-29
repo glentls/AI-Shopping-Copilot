@@ -17,6 +17,7 @@ from src.extract import (
     extract_slots,
     parse_budget,
 )
+from src.lexicons import LEXICON
 
 
 def _values(found: dict, slot: str, polarity: bool | None = None) -> set[str]:
@@ -98,6 +99,63 @@ class CustomerExtractionTest(unittest.TestCase):
             ["material", "brand"],
         )
         self.assertEqual(detect_no_preference("You decide."), ["*"])
+
+    def test_closure_features_do_not_duplicate_style_values(self) -> None:
+        closure_cases = {
+            "Closure type: Pull On": "pull on closure",
+            "I want a zipper closure": "zipper closure",
+            "It needs zippered pockets": "zipper closure",
+            "Something with buttons": "button closure",
+            "It needs a drawstring waist": "drawstring closure",
+            "I prefer a buckle fastening": "buckle closure",
+            "Please find one with snap buttons": "snap closure",
+        }
+        for text, expected in closure_cases.items():
+            with self.subTest(text=text):
+                found, _ = self.extract(text)
+                self.assertIn(expected, _values(found, "feature"))
+                self.assertNotIn("style", found)
+
+        style_cases = {
+            "a zip-up jacket": "zip up",
+            "a button-down shirt": "button down",
+            "a pullover sweater": "pullover",
+            "slip-on shoes": "slip on",
+        }
+        closure_values = {
+            "pull on closure", "zipper closure", "button closure",
+            "drawstring closure", "buckle closure", "snap closure",
+        }
+        for text, expected in style_cases.items():
+            with self.subTest(text=text):
+                found, _ = self.extract(text)
+                self.assertIn(expected, _values(found, "style"))
+                self.assertTrue(_values(found, "feature").isdisjoint(closure_values))
+
+    def test_closure_and_style_surface_forms_are_disjoint(self) -> None:
+        closure_values = {
+            "pull on closure", "zipper closure", "button closure",
+            "drawstring closure", "buckle closure", "snap closure",
+        }
+
+        def surfaces(slot: str, values: set[str]) -> set[str]:
+            return {
+                " ".join(surface.casefold().replace("-", " ").split())
+                for canonical, aliases in LEXICON[slot].items()
+                if canonical in values
+                for surface in [canonical, *aliases]
+            }
+
+        closure_surfaces = surfaces("feature", closure_values)
+        style_surfaces = surfaces("style", set(LEXICON["style"]))
+        self.assertTrue(closure_surfaces.isdisjoint(style_surfaces))
+
+    def test_closure_negation_has_negative_polarity(self) -> None:
+        found, _ = self.extract("No zipper or snap closure, please.")
+        self.assertEqual(
+            _values(found, "feature", False),
+            {"zipper closure", "snap closure"},
+        )
 
 
 class AttributeTableTest(unittest.TestCase):
@@ -304,6 +362,100 @@ class CatalogPrecisionTest(unittest.TestCase):
         self.assertIn("BROAD_TRUE", table.matching("feature", "soft"))
         self.assertIn("BROAD_TRUE", table.matching("use_case", "work"))
         self.assertIn("BROAD_TRUE", table.matching("style", "classic"))
+
+    def test_catalog_closures_do_not_duplicate_style_or_prose_noise(self) -> None:
+        products = [
+            {
+                "parent_asin": "PULL_ON",
+                "title": "Pull-On Walking Shoe",
+                "features": [],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Shoes"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "STYLE_ONLY",
+                "title": "Zip-Up Button-Down Jacket",
+                "features": [],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Jackets"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "BUTTON",
+                "title": "Casual Shirt",
+                "features": ["Closure type: Button"],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Shirts"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "SNAP_DETAILS",
+                "title": "Baby Bodysuit",
+                "features": [],
+                "description": [],
+                "details": {"Closure Type": "Snap"},
+                "categories": ["Clothing, Shoes & Jewelry", "Baby"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "MULTI",
+                "title": "Utility Pants",
+                "features": ["Drawstring waist with an adjustable buckle"],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Pants"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "PROSE_NOISE",
+                "title": "Camera Pendant",
+                "features": [],
+                "description": ["Take a snap photo, then pull on the strap to adjust it."],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Necklaces"],
+                "store": "Example",
+                "price": None,
+            },
+            {
+                "parent_asin": "NEGATED",
+                "title": "Minimalist Backpack",
+                "features": ["No zipper or snap closure"],
+                "description": [],
+                "details": {},
+                "categories": ["Clothing, Shoes & Jewelry", "Backpacks"],
+                "store": "Example",
+                "price": None,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            catalog = root / "catalog.jsonl"
+            catalog.write_text(
+                "".join(json.dumps(product) + "\n" for product in products),
+                encoding="utf-8",
+            )
+            table = build_attribute_table(catalog, root / "artifacts")
+
+        self.assertEqual(table.matching("feature", "pull on closure"), {"PULL_ON"})
+        self.assertEqual(table.matching("feature", "button closure"), {"BUTTON"})
+        self.assertEqual(table.matching("feature", "snap closure"), {"SNAP_DETAILS"})
+        self.assertEqual(table.matching("feature", "drawstring closure"), {"MULTI"})
+        self.assertEqual(table.matching("feature", "buckle closure"), {"MULTI"})
+        self.assertEqual(table.matching("style", "zip up"), {"STYLE_ONLY"})
+        self.assertEqual(table.matching("style", "button down"), {"STYLE_ONLY"})
+        for asin in ("STYLE_ONLY", "PROSE_NOISE", "NEGATED"):
+            self.assertFalse({
+                value for value in table.values(asin, "feature") if value.endswith("closure")
+            })
 
 
 if __name__ == "__main__":

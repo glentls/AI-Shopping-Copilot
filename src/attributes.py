@@ -21,7 +21,7 @@ from src.lexicons import PATTERNS
 
 
 ARTIFACT_NAME = "attributes.json"
-ARTIFACT_VERSION = 3
+ARTIFACT_VERSION = 4
 
 SOURCE_CONFIDENCE = {
     "details": 0.99,
@@ -110,6 +110,20 @@ _CLASSIC_STYLE_RE = re.compile(
 )
 _CLASSIC_PAIRING_RE = re.compile(
     r"^classic\s+(?:and|or|meets)\s+(?:modern|contemporary|timeless|stylish)",
+    re.IGNORECASE,
+)
+_PULL_ON_PRODUCT_RE = re.compile(
+    r"^[\s-]*(?:closure|design|style|waist|waistband|pants?|shorts?|skirts?|"
+    r"dresses?|shirts?|tops?|shoes?|boots?|sneakers?|slippers?)\b",
+    re.IGNORECASE,
+)
+_SNAP_AFTER_RE = re.compile(
+    r"^[\s-]*(?:(?:at|on)\s+)?(?:closure|fasten(?:ing|er)?|buttons?|front|back|"
+    r"crotch|placket|pockets?|waist)\b",
+    re.IGNORECASE,
+)
+_SNAP_BEFORE_RE = re.compile(
+    r"\b(?:closure|fasten(?:ing|er)?|adjustable|with\s+(?:an?\s+)?)\s*$",
     re.IGNORECASE,
 )
 
@@ -202,6 +216,15 @@ def _catalog_context_allows(
     if (slot, canonical) == ("style", "classic") and surface == "classic":
         following = text[match.start():match.end() + 80]
         return bool(_CLASSIC_STYLE_RE.search(following) or _CLASSIC_PAIRING_RE.search(following))
+
+    if (slot, canonical) == ("feature", "pull on closure") and surface == "pull on":
+        right = text[match.end():match.end() + 50]
+        return bool(_PULL_ON_PRODUCT_RE.search(right))
+
+    if (slot, canonical) == ("feature", "snap closure") and surface in {"snap", "snaps"}:
+        left = text[max(0, match.start() - 40):match.start()]
+        right = text[match.end():match.end() + 40]
+        return bool(_SNAP_BEFORE_RE.search(left) or _SNAP_AFTER_RE.search(right))
 
     return True
 

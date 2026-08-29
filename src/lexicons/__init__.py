@@ -210,6 +210,33 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         "comfortable": ["comfortable", "comfort", "comfy", "cushioned", "cushioning", "arch support", "supportive"],
         "adjustable": ["adjustable", "customizable fit"],
         "pockets": ["pockets", "pocket", "storage pocket"],
+        "pull on closure": [
+            "pull on", "pull-on", "pull on closure", "pull-on closure",
+            "pull on design", "easy to pull on", "closure type: pull on",
+        ],
+        "zipper closure": [
+            "zipper", "zipper closure", "zip closure", "zip fastening",
+            "zippered", "zipper fastening", "zippered closure", "with a zipper",
+            "closure type: zipper",
+        ],
+        "button closure": [
+            "button closure", "button fastening", "button up", "button-up",
+            "closure type button", "closure type: button", "with buttons",
+            "has buttons",
+        ],
+        "drawstring closure": [
+            "drawstring", "drawstring closure", "drawstring waist",
+            "drawstring waistband", "adjustable drawstring", "with a drawstring",
+            "closure type: drawstring",
+        ],
+        "buckle closure": [
+            "buckle", "buckle closure", "buckle fastening", "adjustable buckle",
+            "with a buckle", "closure type: buckle",
+        ],
+        "snap closure": [
+            "snap", "snaps", "snap closure", "snap fastening", "snap button",
+            "snap buttons", "press stud", "press studs", "closure type: snap",
+        ],
         "stretch": ["stretch", "stretchy", "elastic", "four way stretch", "4 way stretch"],
         "uv protection": ["uv protection", "sun protection", "upf", "uva", "uvb"],
         "windproof": ["windproof", "wind proof", "wind resistant", "wind-resistant"],
