@@ -26,6 +26,7 @@ BUDGET_RANGE_RE = re.compile(
     rf"(?:between|from)\s*{_CURRENCY}(?P<lo1>{_NUMBER})\s*(?:and|to|-)\s*{_CURRENCY}(?P<hi1>{_NUMBER})"
     rf"|{_CURRENCY_REQUIRED}(?P<lo2>{_NUMBER})\s*(?:-|to)\s*{_CURRENCY}(?P<hi2>{_NUMBER})"
     rf"|(?P<lo3>{_NUMBER})\s*(?:-|to)\s*(?P<hi3>{_NUMBER})\s*(?:dollars?|usd)"
+    rf"|budget(?: is| of| around)?\s*{_CURRENCY}(?P<lo4>{_NUMBER})\s*(?:-|to)\s*{_CURRENCY}(?P<hi4>{_NUMBER})"
     rf")",
     re.IGNORECASE,
 )
@@ -71,7 +72,7 @@ def parse_budget(text: str) -> float | None:
     source = text or ""
     match = BUDGET_RANGE_RE.search(source)
     if match:
-        high = match.group("hi1") or match.group("hi2") or match.group("hi3")
+        high = match.group("hi1") or match.group("hi2") or match.group("hi3") or match.group("hi4")
         return _number(high)
     match = BUDGET_MAX_RE.search(source)
     if match:
