@@ -5,6 +5,9 @@ Backed by sqlite3 FTS5 (same engine used by the weak baseline in
 50k-row catalog. A single ``Retriever`` instance builds one in-memory index
 and is safe to reuse across sessions (reads only).
 
+It does **not** build its own index -- it borrows the shared in-memory FTS5
+DB owned by :class:`src.catalog.Catalog`, which is built once at startup.
+
 The public entrypoint is :meth:`Retriever.retrieve_bm25`, which consumes the
 same ``dict[str, list]`` "search key" shape the ledger stores, e.g.::
 
@@ -20,10 +23,10 @@ Field values are auto-classified by shape:
 
 from __future__ import annotations
 
-import json
 import re
-import sqlite3
-from pathlib import Path
+
+from ..catalog import Catalog
+from ..catalog.catalog import TABLE_NAME, TEXT_COLUMNS as _TEXT_COLUMNS
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -32,18 +35,6 @@ STOPWORDS = {
     "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
     "that", "the", "this", "to", "want", "with", "would", "you", "looking",
 }
-
-# The FTS columns, in the order they are declared / inserted. ``parent_asin``
-# is UNINDEXED (returned, never matched) and the two trailing numeric columns
-# are UNINDEXED filter columns.
-_TEXT_COLUMNS: tuple[str, ...] = (
-    "title",
-    "categories",
-    "features",
-    "details",
-    "store",
-    "description",
-)
 
 # Default per-column BM25 weights, mirroring src/agent.py's bm25() call
 # (parent_asin column is weight 0.0 -- never contributes to the score).
@@ -88,17 +79,6 @@ _NUMERIC_FIELD_TO_COLUMN: dict[str, str] = {
 }
 
 
-def _text(value: object) -> str:
-    """Flatten a catalog value into a single searchable string."""
-    if value is None:
-        return ""
-    if isinstance(value, dict):
-        return " ".join(f"{key} {item}" for key, item in value.items())
-    if isinstance(value, list):
-        return " ".join(str(item) for item in value)
-    return str(value)
-
-
 def _terms(text: str) -> list[str]:
     """Lowercase content tokens, dropping stopwords and 1-char noise."""
     return [
@@ -126,54 +106,13 @@ class Retriever:
 
     def __init__(
         self,
-        catalog_path: str | Path = "data/catalog.jsonl",
+        catalog: Catalog,
         weights: dict[str, float] | None = None,
         field_map: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
-        self.catalog_path = Path(catalog_path)
+        self.catalog = catalog
         self.weights = {**_DEFAULT_WEIGHTS, **(weights or {})}
         self.field_map = {**_DEFAULT_FIELD_MAP, **(field_map or {})}
-        self.connection = sqlite3.connect(":memory:")
-        self._build_index()
-
-    # ------------------------------------------------------------------
-    # Index construction
-    # ------------------------------------------------------------------
-    def _build_index(self) -> None:
-        cursor = self.connection.cursor()
-        cursor.execute(
-            "CREATE VIRTUAL TABLE products USING fts5("
-            "parent_asin UNINDEXED, title, categories, features, details, store, description, "
-            "price UNINDEXED, average_rating UNINDEXED, "
-            "tokenize='unicode61 remove_diacritics 2')"
-        )
-        batch: list[tuple] = []
-        with self.catalog_path.open(encoding="utf-8") as handle:
-            for line in handle:
-                product = json.loads(line)
-                batch.append(
-                    (
-                        str(product["parent_asin"]),
-                        _text(product.get("title")),
-                        _text(product.get("categories")),
-                        _text(product.get("features")),
-                        _text(product.get("details")),
-                        _text(product.get("store")),
-                        _text(product.get("description")),
-                        product.get("price"),
-                        product.get("average_rating"),
-                    )
-                )
-                if len(batch) >= 1000:
-                    cursor.executemany(
-                        "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", batch
-                    )
-                    batch.clear()
-        if batch:
-            cursor.executemany(
-                "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", batch
-            )
-        self.connection.commit()
 
     # ------------------------------------------------------------------
     # Retrieval
@@ -196,18 +135,18 @@ class Retriever:
         )
         # parent_asin (col 0) is weight 0.0; trailing UNINDEXED numeric columns
         # are omitted -- bm25() only weights the text columns.
-        rank = f"bm25(products, 0.0, {bm25_args})"
+        rank = f"bm25({TABLE_NAME}, 0.0, {bm25_args})"
 
         if match_expression:
             sql = (
-                "SELECT parent_asin FROM products WHERE products MATCH ? "
+                f"SELECT parent_asin FROM {TABLE_NAME} WHERE {TABLE_NAME} MATCH ? "
                 f"{where_clause} ORDER BY {rank} LIMIT ?"
             )
             params = [match_expression, *where_params, top_k]
         elif where_clause:
             # No text terms: numeric-filter-only query, best-rated first.
             sql = (
-                "SELECT parent_asin FROM products "
+                f"SELECT parent_asin FROM {TABLE_NAME} "
                 f"{where_clause.replace('AND', 'WHERE', 1)} "
                 "ORDER BY average_rating DESC LIMIT ?"
             )
@@ -215,7 +154,7 @@ class Retriever:
         else:
             return []
 
-        rows = self.connection.execute(sql, params).fetchall()
+        rows = self.catalog.execute(sql, params)
         return [str(row[0]) for row in rows]
 
     # ------------------------------------------------------------------

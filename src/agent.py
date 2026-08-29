@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .catalog import Catalog
 from .retrieval import Retriever
 
 
@@ -27,7 +28,8 @@ class Agent:
 
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
         self.catalog_path = Path(catalog_path)
-        self.retriever = Retriever(self.catalog_path)
+        self.catalog = Catalog(self.catalog_path)
+        self.retriever = Retriever(self.catalog)
         self._sessions: set[str] = set()
 
     def reset(self, session_id: str, user_profile: dict) -> None:
