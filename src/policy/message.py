@@ -158,6 +158,13 @@ def _opening(state: ConversationState) -> str:
     if state.turn == 1:
         return "Happy to help — let me start with a few options."
 
+    if message.strip():
+        # They said something substantive and the extractor found nothing new
+        # in it -- often a detail the lexicon does not cover, or a constraint
+        # we already hold. Acknowledge the customer rather than talking past
+        # them; the words still reach the ranker through the query text.
+        return "Noted — I have factored that in."
+
     return STALL_LINES[state.turn % len(STALL_LINES)]
 
 
