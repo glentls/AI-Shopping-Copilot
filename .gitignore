@@ -17,5 +17,3 @@ docs/participant_release_checklist.md
 tests/test_5core_builder.py
 tests/test_organizer_pipeline.py
 *.log
-
-docs/plan/*
