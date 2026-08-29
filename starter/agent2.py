@@ -173,6 +173,15 @@ class Agent:
             return None
         return None
 
+    def _is_overgeneral(self, state: dict, message: str) -> bool:
+        """Conversation-only overload signal, used when Pillar 1 gives no metadata."""
+        vague = (
+            "something", "anything", "some options", "show me options",
+            "surprise me", "not sure", "whatever", "just browsing",
+        )
+        known_slots = sum(value is not None for value in state["slots"].values())
+        return known_slots == 0 and (len(_terms(message)) <= 4 or any(phrase in message.lower() for phrase in vague))
+
     def respond(
         self,
         session_id: str,
@@ -184,10 +193,13 @@ class Agent:
             raise RuntimeError("reset must be called before respond")
         state = self._sessions[session_id]
         self._apply_message(state, user_message)
+        feedback = state.get("retrieval_feedback", {})
+        overloaded = bool(feedback.get("overloaded"))
+        state["overgeneral"] = self._is_overgeneral(state, user_message)
         context = " ".join(value for value in state["slots"].values() if value)
         unique_terms = list(dict.fromkeys(_terms(user_message + " " + context)))[:40]
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
-        if not expression:
+        if not expression or (overloaded and turn < 8):
             recommendations: list[dict] = []
         else:
             rows = self.connection.execute(
