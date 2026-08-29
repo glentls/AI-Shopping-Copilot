@@ -108,7 +108,6 @@ class Agent:
         scenario = detect_scenario(user_message, session.get("history", []))
 
         if scenario == "intent_override":
-            self._ledger.clear_constraints(session_id)
             self._ledger.set_intent(session_id, "buying")
         elif scenario == "boundary":
             asked = self._ledger.read(session_id)["asked_attributes"]
