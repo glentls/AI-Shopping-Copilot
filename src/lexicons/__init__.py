@@ -263,7 +263,7 @@ LEXICON: dict[str, dict[str, list[str]]] = {
     "use_case": {
         "travel": ["travel", "traveling", "travelling", "vacation", "trip", "on the go", "on-the-go"],
         "hiking": ["hiking", "trail", "trekking", "backpacking"],
-        "running": ["running", "jogging", "marathon"],
+        "running": ["running", "jogging", "marathon", "run", "jog"],
         "walking": ["walking", "long walks", "all day walking"],
         "gym": ["gym", "workout", "working out", "training", "fitness", "exercise"],
         "yoga": ["yoga", "pilates"],
@@ -295,6 +295,12 @@ OVERRIDE_CUES = (
     "ignore what i said", "ignore my earlier", "ignore that", "changed my mind",
     "change my mind", "scratch that", "forget what i said", "forget that",
     "rather than", "no longer", "i take that back",
+    # People correct themselves mid-breath far more often than they announce a
+    # change of mind. Without these, "sneakers -> actually boots -> no wait,
+    # sandals" ends up holding boots AND sandals, which is precisely the
+    # contradiction the intent-override scenario exists to punish.
+    "no wait", "wait no", "hold on", "on reflection", "second thoughts",
+    "i meant", "my mistake", "correction",
 )
 
 NO_PREFERENCE_CUES = (
@@ -315,10 +321,17 @@ NO_PREFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A missed negation is worse than a missed extraction: the reranker scores one
+# point per ACTIVE value, so "I hate polyester" left un-negated makes the agent
+# hunt for polyester. The simulator never phrases a rejection this way, so none
+# of this is visible in the public score -- see docs/lane_c_robustness.md.
 NEGATION_CUES = (
     "anything but", "don't want", "dont want", "do not want", "wouldn't want",
     "would not want", "must not", "no more", "not", "no", "without", "avoid",
     "excluding", "exclude", "except",
+    "nothing", "never", "hate", "hates", "hated", "dislike", "dislikes",
+    "can't", "cant", "cannot", "can not", "won't wear", "wont wear",
+    "rather not", "steer clear of", "stay away from", "allergic to",
 )
 
 SLOT_ALIASES: dict[str, tuple[str, ...]] = {

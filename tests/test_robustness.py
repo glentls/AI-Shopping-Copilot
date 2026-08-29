@@ -6,11 +6,10 @@ build. This module keeps CI honest without freezing the bugs in place:
 
   1. No input may ever raise. The evaluator scores a raised exception as a
      MISS, so this is absolute and applies to every case, soft included.
-  2. No NEW hard failure may appear. KNOWN_FAILURES is an allowlist; anything
-     failing outside it fails the build.
+  2. No hard failure may appear at all. KNOWN_FAILURES is an allowlist and is
+     currently empty -- all 283 hard cases pass.
 
-When you fix one, delete its line from KNOWN_FAILURES. The list may only ever
-get shorter. `python3 -m tools.robustness --failures` shows the detail.
+`python3 -m tools.robustness --failures` shows the detail.
 """
 
 from __future__ import annotations
@@ -20,27 +19,11 @@ import unittest
 from tests.robustness_cases import CASES, DIALOGUES
 from tools.robustness import _table, evaluate, evaluate_dialogue
 
-# Known gaps, all in the cue lexicons (src/lexicons/__init__.py). See
-# docs/lane_c_robustness.md for the analysis. Shrink this list, never grow it.
-KNOWN_FAILURES = {
-    # NEGATION_CUES misses "nothing", "hate", "never", "can't". The negated
-    # value stays an ACTIVE preference, so the ranker chases what the customer
-    # just rejected -- worse than not extracting it at all.
-    "nothing in pink",
-    "I hate the colour orange",
-    "nothing sleeveless",
-    "I can't wear nylon",
-    "never black",
-    "nothing waterproof, I don't need it",
-    "I hate polyester",
-    "can't stand synthetic fabrics",
-    # OVERRIDE_CUES misses "no wait".
-    "show me sneakers | actually boots | no wait, sandals",
-    # A bare number trailing a model name reads as a price ceiling.
-    "air max 90",
-    # use_case lexicon has "running" but not the bare verb "run".
-    "for my morning run",
-}
+# Empty, and it should stay that way. Every case in the corpus asserts
+# behaviour that should not be controversial, so a hard failure is a bug. If
+# you add a case the pipeline cannot yet satisfy, either mark it soft=True in
+# the corpus (genuinely debatable) or fix the pipeline -- do not park it here.
+KNOWN_FAILURES: set[str] = set()
 
 
 class TestNeverRaises(unittest.TestCase):

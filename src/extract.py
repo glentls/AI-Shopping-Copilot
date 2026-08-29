@@ -30,9 +30,17 @@ BUDGET_RANGE_RE = re.compile(
     rf")",
     re.IGNORECASE,
 )
+# "under 80" is unambiguous budget language; a bare "max 90" is not, because
+# product names are full of it -- "air max 90" was being read as a $90 ceiling.
+# So the strong triggers stand alone, while max/maximum needs a currency marker
+# or an explicit "dollars".
+_STRONG_MAX = r"under|below|less than|no more than|not over|up to|within|at most"
 BUDGET_MAX_RE = re.compile(
-    rf"(?:under|below|less than|no more than|not over|max(?:imum)?(?: of)?|up to|within)"
-    rf"\s*{_CURRENCY}(?P<maximum>{_NUMBER})(?:\s*(?:dollars?|usd))?",
+    rf"(?:"
+    rf"(?:{_STRONG_MAX})\s*{_CURRENCY}(?P<maximum>{_NUMBER})(?:\s*(?:dollars?|usd))?"
+    rf"|max(?:imum)?(?: of)?\s*(?:{_CURRENCY_REQUIRED}(?P<max_cur>{_NUMBER})"
+    rf"|(?P<max_word>{_NUMBER})\s*(?:dollars?|usd))"
+    rf")",
     re.IGNORECASE,
 )
 BUDGET_AROUND_RE = re.compile(
@@ -76,7 +84,9 @@ def parse_budget(text: str) -> float | None:
         return _number(high)
     match = BUDGET_MAX_RE.search(source)
     if match:
-        return _number(match.group("maximum"))
+        ceiling = (match.group("maximum") or match.group("max_cur")
+                   or match.group("max_word"))
+        return _number(ceiling)
     match = BUDGET_AROUND_RE.search(source)
     if match:
         return _number(match.group("around"))
