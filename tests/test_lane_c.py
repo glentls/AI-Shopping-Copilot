@@ -1,0 +1,360 @@
+"""Lane C: dialogue policy.
+
+The four behaviours the brief names, plus the ones that actually broke while
+building it. Everything but the last class runs on synthetic fixtures so the
+suite stays in milliseconds; TestAgentContract builds a real Agent over a
+miniature catalog to prove the wiring holds end to end.
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from src.attributes import AttributeTable
+from src.contracts import Candidate, ConversationState
+from src.policy.message import compose_message
+from src.policy.question import (
+    DECLINE_PATIENCE,
+    choose_question,
+    other_value,
+    recommendation_window,
+    score_slots,
+    wildcard_declines,
+)
+from src.policy.state import learned_on, update
+
+
+def make_state(**kwargs) -> ConversationState:
+    return ConversationState(session_id="t", user_profile={}, **kwargs)
+
+
+def make_table(inverted: dict[str, dict[str, list[str]]], total: int = 100) -> AttributeTable:
+    return AttributeTable(
+        {slot: {value: set(asins) for value, asins in values.items()}
+         for slot, values in inverted.items()},
+        total,
+    )
+
+
+def make_candidates(n: int = 20) -> list[Candidate]:
+    return [Candidate(parent_asin=f"A{i:03}", score=float(-i)) for i in range(n)]
+
+
+def say(state: ConversationState, message: str, turn: int, asked: str | None = None) -> None:
+    """One turn, in the order starter/agent.py runs it: update, then record."""
+    update(state, message, turn)
+    if asked:
+        state.asked.append(asked)
+        state.last_asked = asked
+
+
+TABLE = make_table({
+    "material": {"cotton": ["A001", "A002"], "leather": ["A003"]},
+    "color": {"black": ["A001"], "blue": ["A002", "A003"]},
+    "use_case": {"hiking": ["A001"], "work": ["A002"]},
+    "style": {"slim": ["A001"]},
+    "feature": {"waterproof": ["A002"]},
+    "brand": {"acme": ["A001"], "other": ["A002"]},
+    "category": {"boots": ["A001", "A002", "A003"]},
+    "size": {"wide": ["A001"]},
+    "budget": {"50": ["A001"]},
+})
+
+
+class TestOverride(unittest.TestCase):
+    """15% of sessions replace a preference on turn 3 or 4."""
+
+    def test_override_retracts_the_old_value(self):
+        state = make_state()
+        say(state, "I want a cotton shirt", 1, asked="other")
+        self.assertEqual(state.active("material"), ["cotton"])
+
+        say(state, "Actually, ignore that — I need leather instead", 2)
+        self.assertEqual(state.active("material"), ["leather"])
+        self.assertIn("cotton", state.excluded("material"))
+
+    def test_override_keeps_a_value_it_merely_restates(self):
+        """"Actually, what I need is leather" when we already had leather is
+        the customer stressing a priority, not changing one."""
+        state = make_state()
+        say(state, "I need a leather belt", 1, asked="other")
+        say(state, "Actually, ignore my earlier preference. What I need is: leather.", 2)
+        self.assertEqual(state.active("material"), ["leather"])
+        self.assertEqual(state.excluded("material"), [])
+
+    def test_retracted_value_can_be_revived(self):
+        state = make_state()
+        say(state, "cotton please", 1, asked="other")
+        say(state, "actually, leather instead", 2)
+        self.assertIn("cotton", state.excluded("material"))
+        say(state, "on reflection, cotton", 3)
+        self.assertIn("cotton", state.active("material"))
+        self.assertNotIn("cotton", state.excluded("material"))
+
+
+class TestRepeats(unittest.TestCase):
+    def test_repeat_folds_instead_of_duplicating(self):
+        """One fact said twice is one fact. The reranker scores a point per
+        live value, so a duplicate quietly doubles its weight."""
+        state = make_state()
+        say(state, "something in cotton", 1, asked="other")
+        say(state, "cotton, and it should be waterproof", 2, asked="other")
+        self.assertEqual(state.active("material"), ["cotton"])
+        self.assertEqual(len(state.slots["material"]), 1)
+
+    def test_repeat_is_not_a_newly_learned_fact(self):
+        """SlotValue.turn is the turn a fact was LEARNED on; a repeat must not
+        restamp it, or a silent turn reads as a productive one."""
+        state = make_state()
+        say(state, "cotton", 1, asked="other")
+        say(state, "cotton again", 2, asked="other")
+        self.assertEqual(learned_on(state, 1), 1)
+        self.assertEqual(learned_on(state, 2), 0)
+
+    def test_repeat_raises_confidence(self):
+        state = make_state()
+        say(state, "cotton", 1, asked="other")
+        first = state.slots["material"][0].confidence
+        say(state, "cotton", 2, asked="other")
+        self.assertGreater(state.slots["material"][0].confidence, first)
+
+
+class TestBoundary(unittest.TestCase):
+    """5% of sessions answer 'I have no preference for what you asked'."""
+
+    def test_no_preference_marks_the_asked_slot_unanswerable(self):
+        state = make_state()
+        say(state, "I need boots", 1, asked="material")
+        say(state, "I don't have a preference for material; please use your judgment.", 2)
+        self.assertIn("material", state.unanswerable)
+
+    def test_implicit_no_preference_resolves_to_what_we_asked(self):
+        state = make_state()
+        say(state, "I need boots", 1, asked="color")
+        say(state, "You decide.", 2)
+        self.assertIn("color", state.unanswerable)
+
+    def test_an_unanswerable_slot_is_never_asked_again(self):
+        state = make_state(unanswerable={"material"}, turn=2)
+        ranked = dict(score_slots(state, make_candidates(), TABLE))
+        self.assertNotIn("material", ranked)
+
+        attribute, extras = choose_question(state, make_candidates(), TABLE)
+        self.assertNotIn("material", [attribute, *extras])
+
+
+class TestQuestionChoice(unittest.TestCase):
+    def test_never_repeats_a_slot_already_asked(self):
+        state = make_state(asked=["material", "color"], turn=3)
+        ranked = dict(score_slots(state, make_candidates(), TABLE))
+        self.assertNotIn("material", ranked)
+        self.assertNotIn("color", ranked)
+
+    def test_never_asks_a_slot_we_already_know(self):
+        state = make_state()
+        say(state, "I want cotton", 1)
+        ranked = dict(score_slots(state, make_candidates(), TABLE))
+        self.assertNotIn("material", ranked)
+
+    def test_always_asks_something(self):
+        """A null ask_attribute is not a saved turn -- the simulator answers it
+        with 'ask me about one specific attribute' and we lose the turn."""
+        state = make_state(
+            asked=list(TABLE.slots()), unanswerable=set(TABLE.slots()), turn=9
+        )
+        attribute, _ = choose_question(state, make_candidates(), TABLE)
+        self.assertIsNotNone(attribute)
+
+    def test_bundles_extra_topics(self):
+        """Only ask_attribute is scored, so the prose is free upside."""
+        state = make_state(turn=1)
+        attribute, extras = choose_question(state, make_candidates(), TABLE)
+        self.assertTrue(extras)
+        self.assertNotIn(attribute, extras)
+
+
+class TestWildcardPricing(unittest.TestCase):
+    def test_wildcard_leads_on_a_fresh_session(self):
+        state = make_state(turn=1)
+        attribute, _ = choose_question(state, make_candidates(), TABLE)
+        self.assertEqual(attribute, "other")
+
+    def test_yield_falls_when_the_wildcard_stops_paying(self):
+        productive = make_state()
+        say(productive, "I need boots", 1, asked="other")
+        say(productive, "cotton and waterproof", 2, asked="other")
+
+        silent = make_state()
+        say(silent, "I need boots", 1, asked="other")
+        say(silent, "nothing more to add", 2, asked="other")
+        say(silent, "nothing more to add", 3, asked="other")
+
+        self.assertGreater(other_value(productive), other_value(silent))
+
+    def test_one_refusal_does_not_stand_the_wildcard_down(self):
+        """A boundary customer refuses whatever we ask first, then answers
+        normally. Giving up on one refusal costs boundary MTTC 4.00 -> 4.90."""
+        state = make_state()
+        say(state, "I'm looking for boots, but I'm still exploring.", 1, asked="other")
+        say(state, "I don't have a preference for other; please use your judgment.", 2)
+        self.assertEqual(wildcard_declines(state), 1)
+        self.assertGreater(other_value(state), 0.0)
+
+    def test_repeated_refusals_stand_the_wildcard_down(self):
+        state = make_state()
+        say(state, "I'm looking for boots", 1, asked="other")
+        for turn in range(2, 2 + DECLINE_PATIENCE):
+            say(state, "I don't have an additional preference for other.", turn, asked="other")
+        self.assertGreaterEqual(wildcard_declines(state), DECLINE_PATIENCE)
+        self.assertEqual(other_value(state), 0.0)
+
+        attribute, _ = choose_question(state, make_candidates(), TABLE)
+        self.assertNotEqual(attribute, "other")
+
+
+class TestRecommendationWindow(unittest.TestCase):
+    """Not wired in -- see docs/lane_c_notes.md. Tested so the handoff is a
+    one-line slice in starter/agent.py rather than an untested idea."""
+
+    def test_holds_the_top_ten_while_the_customer_is_talking(self):
+        state = make_state()
+        say(state, "I need cotton boots", 1, asked="other")
+        say(state, "waterproof and black", 2, asked="other")
+        self.assertEqual(recommendation_window(state), 0)
+
+    def test_pages_deeper_once_the_customer_goes_quiet(self):
+        state = make_state()
+        say(state, "I need cotton boots", 1, asked="other")
+        for turn in range(2, 7):
+            say(state, "I don't have an additional preference.", turn, asked="other")
+        self.assertGreater(recommendation_window(state), 0)
+        self.assertEqual(recommendation_window(state) % 10, 0)
+
+
+class TestMessage(unittest.TestCase):
+    def test_acknowledges_only_what_this_turn_taught(self):
+        state = make_state()
+        say(state, "I need cotton", 1, asked="other")
+        say(state, "and waterproof", 2, asked="other")
+        text = compose_message(state, make_candidates(), "other", ["material"])
+        self.assertIn("waterproof", text)
+        self.assertNotIn("cotton", text)
+
+    def test_names_the_constraint_an_override_restates(self):
+        """The restated value folds rather than re-learns, so there is nothing
+        newly learned to name -- but the customer just said it out loud."""
+        state = make_state()
+        say(state, "I need a leather belt", 1, asked="other")
+        say(state, "Actually, ignore my earlier preference. What I need is: leather.", 2,
+            asked="other")
+        text = compose_message(state, make_candidates(), "other", [])
+        self.assertIn("leather", text)
+        self.assertNotIn("the new requirement", text)
+
+    def test_does_not_promise_to_drop_a_topic_it_is_still_asking(self):
+        state = make_state()
+        say(state, "I need boots", 1, asked="other")
+        say(state, "I don't have an additional preference for other.", 2, asked="other")
+        text = compose_message(state, make_candidates(), "other", [])
+        self.assertNotIn("stop asking", text)
+
+    def test_never_raises_on_a_bare_state(self):
+        for message in ("", "hello", "Actually, ignore that.", "You decide."):
+            state = make_state()
+            say(state, message, 1, asked="other")
+            self.assertIsInstance(compose_message(state, [], "other", ["material"]), str)
+
+    def test_wording_moves_across_a_frozen_state(self):
+        """Nothing new arrives after the customer dries up, so identical
+        wording every turn is the default failure. It must not be."""
+        state = make_state()
+        say(state, "I need boots", 1, asked="other")
+        seen = set()
+        for turn in range(2, 8):
+            say(state, "I don't have an additional preference for other.", turn, asked="other")
+            seen.add(compose_message(state, make_candidates(), "other", []))
+        self.assertGreater(len(seen), 1)
+
+
+MINI_CATALOG = [
+    {"parent_asin": "B001", "title": "Waterproof Leather Hiking Boot",
+     "features": ["waterproof", "leather upper"], "description": ["built for hiking"],
+     "details": {"Material": "leather"}, "categories": ["Shoes", "Boots"],
+     "store": "Acme", "price": 90, "rating_number": 400},
+    {"parent_asin": "B002", "title": "Cotton Crew Neck T-Shirt",
+     "features": ["breathable cotton"], "description": ["everyday tee"],
+     "details": {"Material": "cotton"}, "categories": ["Clothing", "Shirts"],
+     "store": "Basics", "price": 20, "rating_number": 900},
+    {"parent_asin": "B003", "title": "Black Wool Winter Coat",
+     "features": ["insulated", "wool"], "description": ["warm winter coat"],
+     "details": {"Material": "wool"}, "categories": ["Clothing", "Coats"],
+     "store": "Northline", "price": 200, "rating_number": 150},
+]
+
+
+class TestAgentContract(unittest.TestCase):
+    """Every turn must return a question AND recommendations. A question with
+    no recommendations throws away a free chance at a hit."""
+
+    @classmethod
+    def setUpClass(cls):
+        from src.contracts import ASK_ATTRIBUTES
+        from starter.agent import Agent
+
+        cls.ASK_ATTRIBUTES = ASK_ATTRIBUTES
+        cls._tmp = tempfile.TemporaryDirectory()
+        root = Path(cls._tmp.name)
+        catalog = root / "catalog.jsonl"
+        catalog.write_text(
+            "\n".join(json.dumps(product) for product in MINI_CATALOG) + "\n",
+            encoding="utf-8",
+        )
+        cls.agent = Agent(catalog, root / "artifacts")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_every_turn_returns_a_question_and_recommendations(self):
+        self.agent.reset("s1", {})
+        messages = [
+            "I'm looking for Shoes Boots. A key requirement is: waterproof.",
+            "For that, what matters is: leather.",
+            "Actually, ignore my earlier preference. What I need is: cotton.",
+            "I don't have a preference for material; please use your judgment.",
+            "I don't have an additional preference for other.",
+        ]
+        for turn, message in enumerate(messages, start=1):
+            with self.subTest(turn=turn):
+                response = self.agent.respond("s1", message, turn, top_k=3)
+                self.assertIsInstance(response["message"], str)
+                self.assertTrue(response["message"].strip())
+                self.assertIn(response["ask_attribute"], self.ASK_ATTRIBUTES)
+                self.assertTrue(response["recommendations"])
+                for item in response["recommendations"]:
+                    self.assertIn("parent_asin", item)
+
+    def test_recommendations_are_padded_to_top_k(self):
+        self.agent.reset("s2", {})
+        response = self.agent.respond("s2", "I'm still exploring.", 1, top_k=3)
+        self.assertEqual(len(response["recommendations"]), 3)
+
+    def test_override_moves_the_ranking(self):
+        """The whole point of retraction: after an override the ranking must
+        reflect the new constraint, not both constraints at once."""
+        self.agent.reset("s3", {})
+        self.agent.respond("s3", "I need a leather boot", 1, top_k=3)
+        after = self.agent.respond(
+            "s3", "Actually, ignore that — I need a cotton shirt instead.", 2, top_k=3
+        )
+        state = self.agent._states["s3"]
+        self.assertEqual(state.active("material"), ["cotton"])
+        self.assertIn("leather", state.excluded("material"))
+        self.assertEqual(after["recommendations"][0]["parent_asin"], "B002")
+
+
+if __name__ == "__main__":
+    unittest.main()
