@@ -157,7 +157,7 @@ class MessageParser:
 
         result.is_override = _matches_any(lowered, OVERRIDE_PATTERNS)
         result.is_no_preference = _matches_any(lowered, NO_PREFERENCE_PATTERNS)
-        result.is_vague = _matches_any(lowered, VAGUE_PATTERNS)
+        pattern_vague = _matches_any(lowered, VAGUE_PATTERNS)
 
         if not result.is_no_preference:
             self._extract_attributes(lowered, text, result)
@@ -169,10 +169,24 @@ class MessageParser:
             and result.keywords
             and not result.is_no_preference
             and not result.is_override
-            and not result.is_vague
+            and not pattern_vague
         )
         if should_fallback:
             result.attributes["feature"] = " ".join(result.keywords[:8])
+
+        # "Vague" = an explicit uncertainty phrase, OR no structured slot was
+        # found (only the loose `feature` catch-all, or nothing at all).
+        # Deliberately NOT based on message length/word count: a short reply
+        # like "blue" or "Size 10" carries a real, actionable structured
+        # attribute and is not vague, even though "I want something
+        # comfortable" (longer, but produces only a `feature` catch-all) is.
+        # A message with an explicit uncertainty phrase AND a real attribute
+        # (e.g. "still exploring, but I like blue") stays vague overall while
+        # still keeping the extracted attribute.
+        structured_keys = set(result.attributes) - {"feature"}
+        result.is_vague = pattern_vague or (
+            not structured_keys and not result.is_no_preference and not result.is_override
+        )
 
         return result
 

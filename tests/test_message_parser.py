@@ -66,6 +66,23 @@ class MessageParserAttributeTest(unittest.TestCase):
         parsed = self.parser.parse("I'm looking for black leather boots, size 9, under $80.")
         self.assertFalse(parsed.is_vague)
 
+    def test_short_reply_with_real_attribute_not_vague(self) -> None:
+        # A short single-word reply is not "vague" if it carries a real,
+        # actionable structured attribute (this is what a customer answering
+        # a clarifying question looks like: "Size 10", "Casual", "blue").
+        for message, expected_key in [("blue", "color"), ("Size 10", "size"), ("Casual", "style")]:
+            with self.subTest(message=message):
+                parsed = self.parser.parse(message)
+                self.assertIn(expected_key, parsed.attributes)
+                self.assertFalse(parsed.is_vague)
+
+    def test_no_structured_attribute_is_vague_even_without_pattern(self) -> None:
+        # No uncertainty phrase here, but nothing structured was extracted
+        # either (only the loose `feature` catch-all) -- still vague.
+        parsed = self.parser.parse("I want something comfortable")
+        self.assertEqual(set(parsed.attributes), {"feature"})
+        self.assertTrue(parsed.is_vague)
+
     def test_generic_reprompt_flagged_vague_not_feature(self) -> None:
         # Real evaluator reprompt (customer_reply, sent when ask_attribute was null):
         # "Those options are not quite right yet. Ask me about one specific attribute."
