@@ -29,7 +29,7 @@ def _empty_entry(session_id: str, user_profile: dict) -> dict:
         "constraints": {},
         "soft_preferences": [],
         "asked_attributes": [],
-        "query_string": "",
+        "search_key": {},
     }
 
 
@@ -138,9 +138,9 @@ class LedgerService:
             if attribute not in asked:
                 asked.append(attribute)
 
-    def set_query_string(self, session_id: str, query: str) -> None:
+    def set_search_key(self, session_id: str, search_key: dict[str, list]) -> None:
         with self._session_lock(session_id):
-            self._store[session_id]["query_string"] = query
+            self._store[session_id]["search_key"] = search_key
 
     def next_unasked_attribute(self, session_id: str) -> str | None:
         with self._session_lock(session_id):
