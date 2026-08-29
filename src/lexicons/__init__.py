@@ -106,6 +106,18 @@ NO_PREFERENCE_CUES = (
     "i'm not fussy", "no idea",
 )
 
+# One pattern for every way the customer says "nothing to add here". Used by
+# the extractor to mark a slot unanswerable, and by the retriever to keep the
+# reply out of the query -- a wasted question costs a turn AND pollutes every
+# search after it.
+NO_PREFERENCE_RE = re.compile(
+    r"(?:do(?:n'?t| not) have (?:an? )?(?:additional |strong )?preference"
+    r"|no (?:additional |strong )?preference"
+    r"|not quite right yet"
+    r"|you decide|use your judg(?:e)?ment|doesn'?t matter|up to you|either is fine)",
+    re.IGNORECASE,
+)
+
 # Words that flip the polarity of the value that follows them.
 NEGATION_CUES = ("not", "no", "without", "avoid", "anything but", "except", "don't want", "dont want")
 

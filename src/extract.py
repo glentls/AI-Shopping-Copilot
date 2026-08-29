@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from src.contracts import ConversationState, SlotValue
-from src.lexicons import NEGATION_CUES, NO_PREFERENCE_CUES, OVERRIDE_CUES, PATTERNS
+from src.lexicons import NEGATION_CUES, NO_PREFERENCE_RE, OVERRIDE_CUES, PATTERNS
 
 # "under $80", "below 80 dollars", "less than $50"
 BUDGET_RE = re.compile(
@@ -81,7 +81,7 @@ def detect_no_preference(text: str) -> list[str]:
     state.last_asked.
     """
     lowered = (text or "").lower()
-    if not any(cue in lowered for cue in NO_PREFERENCE_CUES):
+    if not NO_PREFERENCE_RE.search(lowered):
         return []
     from src.contracts import SLOTS
 

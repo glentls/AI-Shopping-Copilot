@@ -15,14 +15,22 @@ Two rules that hold for every implementation in here:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
 
 from src.attributes import AttributeTable
 from src.contracts import SLOTS, Candidate, ConversationState
+from src.lexicons import NO_PREFERENCE_RE
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+# How many BM25 places one matched slot is worth. Tuned on the public set;
+# sweep with TJ_SLOT_WEIGHT. Weighted too hard (the first version let the slot
+# bonus outrank BM25 outright) a coarse lexicon match drags junk to the top and
+# the score drops ~0.05.
+SLOT_WEIGHT = float(os.environ.get("TJ_SLOT_WEIGHT", "3.0"))
+
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
     "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
@@ -91,9 +99,23 @@ class Retriever:
             cursor.executemany("INSERT INTO products VALUES (?,?,?,?,?,?,?)", batch)
         self.connection.commit()
 
+    @staticmethod
+    def _informative(text: str) -> bool:
+        """Drop replies that carry no preference.
+
+        "I don't have an additional preference for brand." is not signal, and
+        left in the transcript its words go straight into the query and pull
+        the ranking around. Every wasted question costs a turn AND pollutes
+        retrieval for every turn after it.
+        """
+        return not NO_PREFERENCE_RE.search(text)
+
     def _query_text(self, state: ConversationState) -> str:
-        """Everything the customer has said, plus their live slot values."""
-        said = " ".join(text for role, text in state.history if role == "customer")
+        """Everything informative the customer has said, plus live slot values."""
+        said = " ".join(
+            text for role, text in state.history
+            if role == "customer" and self._informative(text)
+        )
         values = " ".join(v for slot in SLOTS for v in state.active(slot))
         return f"{said} {values}"
 
@@ -127,6 +149,9 @@ class Retriever:
                     if value in held:
                         bonus -= 1.5
             candidate.components["slot"] = bonus
-            candidate.score = bonus - position * 0.01
+            # Gentle: a matched slot is worth a few places, not the whole
+            # ranking. Weighted too hard, a coarse lexicon match ("leather"
+            # hits thousands of products) drags junk over a good BM25 result.
+            candidate.score = -position + bonus * SLOT_WEIGHT
         cands.sort(key=lambda c: c.score, reverse=True)
         return cands

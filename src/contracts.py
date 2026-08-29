@@ -49,8 +49,17 @@ class ConversationState:
         return [s.value for s in reversed(self.slots.get(slot, [])) if s.polarity]
 
     def excluded(self, slot: str) -> list[str]:
-        """Values the customer has ruled out for a slot."""
-        return [s.value for s in self.slots.get(slot, []) if not s.polarity]
+        """Values the customer has ruled out and not since re-asserted.
+
+        An override that names the same value it retracts ("actually, what I
+        need is leather" when we already had leather) must not leave that value
+        on both lists -- the ranker would credit it and penalise it at once.
+        """
+        live = set(self.active(slot))
+        return [
+            s.value for s in self.slots.get(slot, [])
+            if not s.polarity and s.value not in live
+        ]
 
     def add(self, slot: str, value: SlotValue) -> None:
         self.slots.setdefault(slot, []).append(value)

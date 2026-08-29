@@ -32,8 +32,14 @@ def update(state: ConversationState, user_message: str, turn: int) -> Conversati
     if retracted:
         targets = set(incoming) if retracted == ["*"] else set(retracted)
         for slot in targets:
+            # Only retract what the new message actually CONTRADICTS. "Actually,
+            # what I need is leather" when we already had leather is a customer
+            # restating their priority, not changing it -- retracting there
+            # throws away a correct constraint and the ranking gets worse.
+            asserted = {v.value for v in incoming.get(slot, []) if v.polarity}
             for held in state.slots.get(slot, []):
-                held.polarity = False
+                if held.polarity and held.value not in asserted:
+                    held.polarity = False
 
     for slot, values in incoming.items():
         for value in values:
