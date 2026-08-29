@@ -14,20 +14,17 @@ python3 -m tools.bench --verify   # replay loop still matches the evaluator
 
 | | score | hit@10 | MRR | MTTC | mean turns to first hit |
 |---|---|---|---|---|---|
-| **overall** | **0.8370** | 0.985 | 0.611 | 2.93 | **2.81** |
-| buying (80) | 0.8255 | 0.975 | 0.562 | 2.52 | 2.31 |
-| browsing (80) | 0.8532 | 1.000 | 0.626 | 2.73 | 2.73 |
-| intent_override (30) | 0.8043 | 0.967 | 0.628 | 4.37 | 4.14 |
-| boundary (10) | 0.8980 | 1.000 | 0.827 | 3.50 | 3.50 |
+| **overall** | **0.8586** | 0.985 | 0.666 | 2.68 | **2.55** |
+| buying (80) | 0.8473 | 0.975 | 0.624 | 2.36 | 2.14 |
+| browsing (80) | 0.8742 | 1.000 | 0.672 | 2.38 | 2.38 |
+| intent_override (30) | 0.8451 | 0.967 | 0.753 | 4.20 | 3.97 |
+| boundary (10) | 0.8638 | 1.000 | 0.686 | 3.10 | 3.10 |
 
-Baseline on entry was 0.7483. First-hit turns: 22 on turn 1, 87 on turn 2, 45 on
-turn 3, 27 on turn 4, then 16 across turns 5-10 that the old agent could never
-have reached. Only 3 sessions miss, and all 3 are retrieved -- they just run out
-of turns. Rank 1 on 96 of the 197 hits, which is where the remaining headroom is.
-
-Mean turns-to-hit rose 2.35 -> 2.81 on purpose: the sessions paging rescues are
-by definition late ones, and trading a slower average for 24 extra hits is worth
-it at 0.50 hit-rate weight against 0.20 efficiency.
+Baseline on entry was 0.7483. Only 3 sessions now miss. Recommendation selection
+uses every continued turn as implicit negative feedback: products already shown
+under the current intent are filtered out before the next top ten is selected.
+An explicit intent override clears that history because pre-override products
+were evaluated against a different need.
 
 `intent_override` MTTC cannot go below ~3.5 by construction: the evaluator only
 counts a hit once `override_applied` is true, which happens on turn 3 or 4, so
@@ -105,6 +102,8 @@ already held is the customer stressing a priority, not changing one; retracting
 there throws away a correct constraint. Retraction flips `polarity`, it never
 deletes — `state.excluded()` feeds a negative rerank signal, and nothing in the
 pipeline hard-filters, so a retraction that turns out to be wrong is recoverable.
+The same transition clears `state.shown_recommendations`, starting a fresh
+recommendation epoch for the new intent.
 
 *Boundary.* "No preference" adds the slot to `state.unanswerable`, and the
 scorer never offers it again. When the customer does not name the slot, it
@@ -125,41 +124,32 @@ see the handoff below.
 
 ## Findings
 
-**1. Six dead turns. Landed: +0.0896.**
+**1. Current-intent recommendation exclusions. Landed: +0.0042 over fixed
+paging.**
 
-No session on the public set has *ever* hit after turn 4. The simulator holds at
-most four constraint strings and discloses two per answer, so the state is
-complete by turn 3; after that the ranking is frozen and we re-send an identical
-top-10 six times.
-
-Meanwhile **all 27 misses are retrieved** — none is missing from the index, they
-just sit below rank 10 (8 at rank 11–20, 11 at 21–50, 7 at 51–100, 1 deeper).
-Paging one window deeper per silent turn, **measured end to end** with the
-wiring below applied and then reverted:
+Once a scored session continues, every product in the preceding top ten is
+known not to be the hidden target. Fixed rank windows avoided repetition only
+after silent turns, and a changed ranking could make adjacent windows overlap.
+The agent now records every returned ASIN and selects the best currently ranked
+candidates not yet shown under this intent.
 
 | | score | hit@10 | MRR | MTTC |
 |---|---|---|---|---|
-| today | 0.7474 | 0.865 | 0.551 | 3.52 |
-| with paging | **0.8370** | 0.985 | 0.611 | 2.93 |
+| fixed silent-turn paging | 0.8544 | 0.980 | **0.672** | 2.865 |
+| literal session-wide exclusion | 0.7452 | 0.860 | 0.557 | 3.600 |
+| **current-intent exclusion** | **0.8586** | **0.985** | 0.666 | **2.680** |
 
-Every scenario improves: buying 0.863 → 0.975, browsing 0.863 → 1.000,
-intent_override 0.867 → 0.967, boundary 0.900 → 1.000.
-
-Two guards in `recommendation_window` are load-bearing, both found by measuring
-rather than reasoning. Paging must not start before turn `TJ_MIN_PAGE_TURN`
-(default 4), and an override must not read as a silent turn. Without the second
-guard, `intent_override` **collapses to hit 0.467 / MTTC 7.77** — those sessions
-do not count a hit until the override lands on turn 3 or 4, and naive paging has
-already scrolled past the target by then. Start-turn sweep: 3 → 0.8147,
-4 → 0.8370, 6 → 0.7908, 8 → 0.7675.
-
-`question.recommendation_window(state)` returns the rank offset and holds at 0
-while the customer is still disclosing, so a slow discloser is never scrolled
-past. The wiring is now in `starter/agent.py`:
+A literal session-wide rule is wrong. Intent-override recommendations cannot
+convert before the new intent is sent, so the eventual target may already have
+appeared without ending the session. Keeping those exclusions collapsed override
+hit rate to 0.133. Clearing them in `_apply_override` preserves override hit rate
+at 0.967 while ordinary turns remain repetition-free.
 
 ```python
-offset = recommendation_window(state, top_k)
-ranked = [c.parent_asin for c in candidates[offset:offset + top_k]]
+ranked = [
+    c.parent_asin for c in candidates
+    if c.parent_asin not in state.shown_recommendations
+][:top_k]
 ```
 
 **`starter/agent.py` is the shared wiring file and Lane C does not normally

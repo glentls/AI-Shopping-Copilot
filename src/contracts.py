@@ -43,6 +43,10 @@ class ConversationState:
     last_asked: Optional[str] = None                     # what we asked last turn
     history: list[tuple[str, str]] = field(default_factory=list)  # (role, text)
     budget_max: Optional[float] = None
+    # Products already offered under the current intent. A continued scored
+    # session proves these are not the hidden target, so they should not spend
+    # another recommendation slot. Intent overrides clear the set.
+    shown_recommendations: set[str] = field(default_factory=set)
 
     def active(self, slot: str) -> list[str]:
         """Current positive values for a slot, most recent first."""

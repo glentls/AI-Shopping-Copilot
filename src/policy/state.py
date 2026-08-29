@@ -67,6 +67,12 @@ def _apply_override(
     retracted = detect_override(user_message)
     if not retracted:
         return
+    # Recommendations made before an override were evaluated against the old
+    # intent. In the challenge they cannot convert before the override lands,
+    # and in a real conversation they may become relevant again after the
+    # customer changes direction. Start a fresh recommendation epoch now so
+    # the new intent may reuse them.
+    state.shown_recommendations.clear()
     targets = set(incoming) if retracted == ["*"] else set(retracted)
     for slot in targets:
         # Only retract what the new message actually CONTRADICTS. "Actually,
