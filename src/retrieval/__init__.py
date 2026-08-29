@@ -204,8 +204,11 @@ class Retriever:
             top_n,
             # Natural requests need dense-only candidates to clear the BM25
             # pool. Verbatim catalog clauses are already high-confidence
-            # lexical evidence, so semantic retrieval becomes a light hedge.
-            dense_weight=0.10 if exact_phrases or generic_browsing else 1.0,
+            # lexical evidence, so they do not need a semantic contribution.
+            # Generic browsing remains a light semantic hedge.
+            dense_weight=(
+                0.0 if exact_phrases else (0.10 if generic_browsing else 1.0)
+            ),
         )
 
     def rerank(self, cands: list[Candidate], state: ConversationState) -> list[Candidate]:

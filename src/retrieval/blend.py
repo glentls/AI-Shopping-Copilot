@@ -36,7 +36,7 @@ def reciprocal_rank_fusion(
     weights = {
         "bm25": _env_float("TJ_BM25_WEIGHT", 1.0),
         "dense": _env_float("TJ_DENSE_WEIGHT", dense_weight),
-        "exact": _env_float("TJ_EXACT_WEIGHT", 0.35),
+        "exact": _env_float("TJ_EXACT_WEIGHT", 0.275),
     }
     candidates: dict[str, Candidate] = {}
     routes = (("bm25", bm25_hits), ("dense", dense_hits), ("exact", exact_hits))
@@ -82,9 +82,13 @@ def rerank_candidates(
     metadata: Mapping[str, tuple[float | None, int]],
 ) -> list[Candidate]:
     """Move matches a few rank places and apply soft-only constraint penalties."""
-    slot_weight = _env_float("TJ_SLOT_WEIGHT", 12.0)
-    budget_weight = _env_float("TJ_BUDGET_WEIGHT", 2.0)
+    slot_weight = _env_float("TJ_SLOT_WEIGHT", 2.0)
+    budget_weight = _env_float("TJ_BUDGET_WEIGHT", 0.5)
+    catalog_confidence_power = max(
+        0.0, _env_float("TJ_CATALOG_CONFIDENCE_POWER", 1.0)
+    )
     tie_data: dict[str, tuple[float, float]] = {}
+    catalog_confidence_for = getattr(table, "confidence", None)
 
     for base_rank, candidate in enumerate(candidates):
         slot_signal = 0.0
@@ -98,7 +102,27 @@ def rerank_candidates(
             for value in requested:
                 if value.value not in held:
                     continue
-                confidence = max(0.0, min(1.0, float(value.confidence)))
+                customer_confidence = max(0.0, min(1.0, float(value.confidence)))
+                reported_catalog_confidence = (
+                    catalog_confidence_for(candidate.parent_asin, slot, value.value)
+                    if callable(catalog_confidence_for)
+                    else None
+                )
+                # A table built without provenance still has valid values.
+                # Treat its missing/zero metadata as unknown, not as evidence
+                # that an otherwise confirmed catalog match should score zero.
+                catalog_confidence = (
+                    float(reported_catalog_confidence)
+                    if reported_catalog_confidence
+                    else 1.0
+                )
+                catalog_confidence = max(0.0, min(1.0, float(catalog_confidence)))
+                provenance_weight = (
+                    catalog_confidence ** catalog_confidence_power
+                    if catalog_confidence_power > 0.0
+                    else 1.0
+                )
+                confidence = customer_confidence * provenance_weight
                 if value.polarity:
                     slot_signal += confidence
                     if best_match is None or confidence > best_match[0]:

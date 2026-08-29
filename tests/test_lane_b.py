@@ -12,11 +12,17 @@ from unittest.mock import patch
 
 from src.contracts import Candidate, ConversationState, SlotValue
 from src.retrieval import Retriever
+from src.retrieval.blend import rerank_candidates
 
 
 class StubTable:
-    def __init__(self, values: dict[tuple[str, str], list[str]] | None = None) -> None:
+    def __init__(
+        self,
+        values: dict[tuple[str, str], list[str]] | None = None,
+        confidence: dict[tuple[str, str, str], float] | None = None,
+    ) -> None:
         self._values = values or {}
+        self._confidence = confidence or {}
 
     def values(self, asin: str, slot: str) -> list[str]:
         return self._values.get((asin, slot), [])
@@ -29,6 +35,9 @@ class StubTable:
 
     def coverage(self, slot: str) -> float:
         return 1.0
+
+    def confidence(self, asin: str, slot: str, value: str) -> float:
+        return self._confidence.get((asin, slot, value), 1.0)
 
 
 def _row(index: int) -> dict:
@@ -92,6 +101,37 @@ class RetrieverTest(unittest.TestCase):
         with patch.dict(os.environ, {"TJ_SLOT_WEIGHT": "12"}):
             self.retriever.rerank([candidate], state)
         self.assertAlmostEqual(candidate.components["slot"], 3.0)
+
+    def test_slot_bonus_uses_catalog_source_confidence(self) -> None:
+        state = ConversationState("session", {})
+        state.add("material", SlotValue("leather", 0.5, 1))
+        candidate = Candidate("P00", 0.0)
+        table = StubTable(
+            {("P00", "material"): ["leather"]},
+            {("P00", "material", "leather"): 0.5},
+        )
+        with patch.dict(
+            os.environ,
+            {"TJ_SLOT_WEIGHT": "12", "TJ_CATALOG_CONFIDENCE_POWER": "1"},
+        ):
+            reranked = rerank_candidates(
+                [candidate], state, table, self.retriever.metadata
+            )
+        self.assertAlmostEqual(reranked[0].components["slot"], 3.0)
+
+    def test_missing_catalog_confidence_preserves_the_slot_match(self) -> None:
+        state = ConversationState("session", {})
+        state.add("material", SlotValue("leather", 0.5, 1))
+        candidate = Candidate("P00", 0.0)
+        table = StubTable(
+            {("P00", "material"): ["leather"]},
+            {("P00", "material", "leather"): 0.0},
+        )
+        with patch.dict(os.environ, {"TJ_SLOT_WEIGHT": "12"}):
+            reranked = rerank_candidates(
+                [candidate], state, table, self.retriever.metadata
+            )
+        self.assertAlmostEqual(reranked[0].components["slot"], 6.0)
 
     def test_query_hygiene_drops_filler_and_old_override_text(self) -> None:
         self.assertFalse(Retriever._informative("I don't have an additional preference for brand."))
