@@ -61,10 +61,10 @@ class Catalog:
         cursor.execute(
             f"CREATE VIRTUAL TABLE {TABLE_NAME} USING fts5("
             "parent_asin UNINDEXED, title, categories, features, details, store, description, "
-            "price UNINDEXED, average_rating UNINDEXED, "
+            "price UNINDEXED, average_rating UNINDEXED, rating_number UNINDEXED, "
             "tokenize='unicode61 remove_diacritics 2')"
         )
-        insert = f"INSERT INTO {TABLE_NAME} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        insert = f"INSERT INTO {TABLE_NAME} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         batch: list[tuple] = []
         with self.catalog_path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -80,6 +80,7 @@ class Catalog:
                         _text(product.get("description")),
                         product.get("price"),
                         product.get("average_rating"),
+                        product.get("rating_number"),
                     )
                 )
                 if len(batch) >= 1000:

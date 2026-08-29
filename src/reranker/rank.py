@@ -12,17 +12,70 @@ rating desc) and assembles the internals the confidence check needs:
 
 from __future__ import annotations
 
-from src.retrieval.catalog import Catalog
-from src.reranker.coverage import compile_constraints
-from src.retrieval.retriever import Retriever
+from src.catalog.catalog import Catalog
+from src.reranker.coverage import Product, compile_constraints
+from src.retrieval.retrieval import Retriever
 from src.reranker.types import RankResult
 
 DEFAULT_POOL = 200
+
+_ROW_COLUMNS = (
+    "parent_asin",
+    "title",
+    "categories",
+    "features",
+    "details",
+    "store",
+    "description",
+    "price",
+    "average_rating",
+    "rating_number",
+)
 
 
 def default_query(constraints: list[str], extra: str = "") -> str:
     """Build a retrieval query string from known constraints (+ optional text)."""
     return " ".join([*constraints, extra]).strip()
+
+
+def _hydrate_products(catalog: Catalog, parent_asins: list[str]) -> dict[str, Product]:
+    """Batch-fetch catalog rows for ``parent_asins`` and build reranker ``Product``
+    shims keyed by parent_asin."""
+    if not parent_asins:
+        return {}
+    placeholders = ", ".join("?" for _ in parent_asins)
+    sql = (
+        f"SELECT {', '.join(_ROW_COLUMNS)} FROM products "
+        f"WHERE parent_asin IN ({placeholders})"
+    )
+    rows = catalog.execute(sql, parent_asins)
+    products: dict[str, Product] = {}
+    for row in rows:
+        (
+            parent_asin,
+            title,
+            categories,
+            features,
+            details,
+            store,
+            description,
+            price,
+            average_rating,
+            rating_number,
+        ) = row
+        text = " ".join(
+            str(part)
+            for part in (title, categories, features, details, store, description)
+            if part
+        ).lower()
+        products[str(parent_asin)] = Product(
+            parent_asin=str(parent_asin),
+            text=text,
+            price=float(price) if price is not None else None,
+            rating_number=int(rating_number) if rating_number is not None else 0,
+            average_rating=float(average_rating) if average_rating is not None else 0.0,
+        )
+    return products
 
 
 class Reranker:
@@ -38,10 +91,12 @@ class Reranker:
         pool_size: int = DEFAULT_POOL,
     ) -> RankResult:
         constraints = constraints or []
-        candidate_ids = self.retriever.search(query, limit=pool_size)
+        candidate_ids = self.retriever.retrieve_bm25({"keywords": [query]}, top_k=pool_size)
 
         if not candidate_ids:
             return RankResult()
+
+        products = _hydrate_products(self.catalog, candidate_ids)
 
         # Compile each constraint once, then reuse across all candidates.
         matchers = compile_constraints(constraints)
@@ -52,7 +107,7 @@ class Reranker:
         max_coverage = 0
         top_tier_crowd = 0
         for retrieval_rank, pid in enumerate(candidate_ids):
-            product = self.catalog.products.get(pid)
+            product = products.get(pid)
             if product is None:
                 continue
             cov = sum(1 for m in matchers if m.matches(product))

@@ -6,9 +6,10 @@ import unittest
 from pathlib import Path
 
 from src.reranker import Reranker, build_reranker, default_query
-from src.reranker.coverage import covers, coverage_count
-from src.retrieval.catalog import Catalog, Product
-from src.retrieval.retriever import Retriever
+from src.reranker.coverage import Product, covers, coverage_count
+from src.reranker.rank import _hydrate_products
+from src.catalog.catalog import Catalog
+from src.retrieval.retrieval import Retriever
 
 
 def _catalog_file(rows: list[dict]) -> str:
@@ -61,24 +62,27 @@ ROWS = [
 class CoverageTest(unittest.TestCase):
     def setUp(self) -> None:
         self.cat = Catalog(_catalog_file(ROWS))
+        self.products = _hydrate_products(
+            self.cat, ["B000000001", "B000000002", "B000000003"]
+        )
 
     def test_single_token_match(self) -> None:
-        p = self.cat.products["B000000001"]
+        p = self.products["B000000001"]
         self.assertTrue(covers(p, "cotton"))
         self.assertFalse(covers(p, "leather"))
 
     def test_color_label_prefix_stripped(self) -> None:
-        p = self.cat.products["B000000001"]
+        p = self.products["B000000001"]
         self.assertTrue(covers(p, "color: blue"))
 
     def test_budget_numeric_within_tolerance(self) -> None:
-        cheap = self.cat.products["B000000002"]  # $35
-        pricey = self.cat.products["B000000003"]  # $120
+        cheap = self.products["B000000002"]  # $35
+        pricey = self.products["B000000003"]  # $120
         self.assertTrue(covers(cheap, "budget around $40"))
         self.assertFalse(covers(pricey, "budget around $40"))
 
     def test_coverage_count(self) -> None:
-        p = self.cat.products["B000000001"]
+        p = self.products["B000000001"]
         n = coverage_count(p, ["cotton", "color: blue", "leather"])
         self.assertEqual(n, 2)
 

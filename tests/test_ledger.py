@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from starter.ledger import LedgerService
+from src.ledger.ledger import LedgerService
 
 
 class LedgerCRUDTest(unittest.TestCase):
@@ -107,7 +107,7 @@ class LedgerHelpersTest(unittest.TestCase):
         self.assertEqual(self.ledger.next_unasked_attribute("s1"), "use_case")
 
     def test_next_unasked_attribute_returns_none_when_all_covered(self) -> None:
-        from starter.ledger import ATTRIBUTE_PRIORITY
+        from src.ledger.ledger import ATTRIBUTE_PRIORITY
         for attr in ATTRIBUTE_PRIORITY:
             self.ledger.mark_attribute_asked("s1", attr)
         self.assertIsNone(self.ledger.next_unasked_attribute("s1"))

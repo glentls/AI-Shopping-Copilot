@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from src.message_parser import LLMMessageParser, ParsedMessage, load_catalog_vocab
+from src.message_parser import MessageParser, ParsedMessage, load_catalog_vocab
 
 _categories, _brands = load_catalog_vocab("data/catalog.jsonl")
-_parser = LLMMessageParser(known_categories=_categories, known_brands=_brands)
+_parser = MessageParser(known_categories=_categories, known_brands=_brands)
 
 
 def parse_message(message: str) -> ParsedMessage:

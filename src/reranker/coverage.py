@@ -21,9 +21,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from src.retrieval.catalog import Product
-
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+@dataclass(frozen=True)
+class Product:
+    """Reranker-local view of a catalog row (mirrors the fields ``rank.py``
+    hydrates from :class:`src.catalog.catalog.Catalog`)."""
+
+    parent_asin: str
+    text: str          # lowercased searchable text
+    price: float | None
+    rating_number: int = 0
+    average_rating: float = 0.0
 
 # Budget: match a number after a budget cue ($, budget, under, less than, <=),
 # or a number immediately followed by a currency word ("25 dollars").
