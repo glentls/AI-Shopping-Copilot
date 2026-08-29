@@ -34,7 +34,7 @@ class HybridSearcher:
     ) -> SearchResult:
         filters = filters or {}
         normalized_mode = "buying" if mode == "buying" else "browsing"
-        slot_values = _slot_values_from_filters(filters)
+        slot_values = _slot_values_from_filters(filters, normalized_mode)
         expression = build_fts_expression(query_text, normalized_mode, slot_values)
         relaxed_search = False
 
@@ -77,8 +77,7 @@ class HybridSearcher:
         )
         return SearchResult(asins=asins[:top_k], feedback=feedback)
 
-
-def _slot_values_from_filters(filters: dict) -> list[str]:
+def _slot_values_from_filters(filters: dict, mode: str = "browsing") -> list[str]:
     values: list[str] = []
     for key in (
         "material",
@@ -95,12 +94,28 @@ def _slot_values_from_filters(filters: dict) -> list[str]:
     ):
         raw = filters.get(key)
         if isinstance(raw, list):
-            values.extend(str(item).strip() for item in raw if str(item).strip())
+            values.extend(
+                str(item).strip()
+                for item in raw
+                if mode == "browsing" or _is_concise_slot_value(str(item).strip())
+            )
         elif raw not in (None, ""):
-            values.append(str(raw).strip())
+            value = str(raw).strip()
+            if mode == "browsing" or _is_concise_slot_value(value):
+                values.append(value)
     if filters.get("max_price") is not None:
         values.append(f"budget around ${filters['max_price']}")
     return list(dict.fromkeys(value for value in values if value))
+
+
+def _is_concise_slot_value(value: str) -> bool:
+    """Keep structured values out of FTS while history carries full utterances."""
+    lowered = value.lower()
+    utterance_markers = (
+        "i'm looking for", "i am looking for", "key requirement is",
+        "what matters is", "what i need is", "those options",
+    )
+    return bool(value) and len(value) <= 80 and not any(marker in lowered for marker in utterance_markers)
 
 
 def _fallback_expression(query_text: str) -> str:

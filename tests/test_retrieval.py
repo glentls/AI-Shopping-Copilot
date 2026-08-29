@@ -18,6 +18,7 @@ from starter.retrieval import (
     rerank_candidates,
     strip_boilerplate,
 )
+from starter.retrieval.search import _slot_values_from_filters
 
 
 SAMPLE_CATALOG = [
@@ -229,6 +230,11 @@ class HybridSearcherTest(unittest.TestCase):
             top_k=10,
         )
         self.assertGreater(len(result.asins), 0)
+
+    def test_buying_ignores_full_utterances_as_slot_phrases(self) -> None:
+        utterance = "I'm looking for shoes. A key requirement is: blue."
+        self.assertEqual(_slot_values_from_filters({"color": utterance}, "buying"), [])
+        self.assertEqual(_slot_values_from_filters({"color": utterance}, "browsing"), [utterance])
 
 
 class CatalogStoreTest(unittest.TestCase):
