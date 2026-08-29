@@ -18,7 +18,7 @@ User Message
     |
     v
 +------------------+
-|   KIV Check      |  <- Check fields to fill, limit turns
+|  Check Fields    |  <- Check fields to fill, limit turns
 +------------------+
     |
     v
@@ -65,7 +65,7 @@ flowchart TD
         B1 -->|Boundary| B5[Skip Strategy]
     end
 
-    subgraph KIV_CHECK["KIV CHECK"]
+    subgraph CHECK_FIELDS["CHECK FIELDS"]
         C[Check Required Fields]
         C1{Turn Limit OK?}
         C2[Track Unfilled Fields]
@@ -140,7 +140,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     A[User Message] --> B[Intent Router]
-    B --> C[KIV Check]
+    B --> C[Check Fields]
     C --> D[Ledger Manager]
     D --> E[BM25 Retrieval]
     E --> F[Reranker Model]
@@ -159,7 +159,7 @@ flowchart LR
 sequenceDiagram
     participant U as User
     participant IR as Intent Router
-    participant KIV as KIV Check
+    participant CF as Check Fields
     participant L as Ledger
     participant BM as BM25
     participant RR as Reranker
@@ -168,15 +168,15 @@ sequenceDiagram
 
     U->>IR: User Message (turn N)
     IR->>IR: Detect Scenario (Buying/Browsing/Override/Boundary)
-    IR->>KIV: Route with scenario type
+    IR->>CF: Route with scenario type
     
-    KIV->>KIV: Check required fields
-    KIV->>KIV: Check turn limit (<=10)
+    CF->>CF: Check required fields
+    CF->>CF: Check turn limit (<=10)
     
     alt Turn > 10
-        KIV->>R: Force recommend (out of turns)
+        CF->>R: Force recommend (out of turns)
     else Turn <= 10
-        KIV->>L: Update ledger
+        CF->>L: Update ledger
     end
     
     L->>L: Store session_id, search_key, attributes
@@ -220,16 +220,16 @@ stateDiagram-v2
     IntentRouting --> OverrideMode: "Actually/Instead" detected
     IntentRouting --> BoundaryMode: "Doesn't matter" detected
     
-    BuyingMode --> KIVCheck
-    BrowsingMode --> KIVCheck
+    BuyingMode --> CheckFields
+    BrowsingMode --> CheckFields
     OverrideMode --> ResetLedger
     BoundaryMode --> SkipAttribute
     
-    ResetLedger --> KIVCheck: Clear old constraints
-    SkipAttribute --> KIVCheck: Mark as boundary
+    ResetLedger --> CheckFields: Clear old constraints
+    SkipAttribute --> CheckFields: Mark as boundary
     
-    KIVCheck --> UpdateLedger: Turn <= 10
-    KIVCheck --> ForceRecommend: Turn > 10
+    CheckFields --> UpdateLedger: Turn <= 10
+    CheckFields --> ForceRecommend: Turn > 10
     
     UpdateLedger --> BM25Search
     BM25Search --> Reranking
@@ -259,7 +259,7 @@ classDiagram
     class Agent {
         -SessionManager session_manager
         -IntentRouter intent_router
-        -KIVChecker kiv_checker
+        -FieldChecker field_checker
         -LedgerManager ledger_manager
         -BM25Retriever retriever
         -Reranker reranker
@@ -278,7 +278,7 @@ classDiagram
         +route(scenario) Strategy
     }
 
-    class KIVChecker {
+    class FieldChecker {
         -List REQUIRED_FIELDS
         -int MAX_TURNS
         +check_fields(ledger) Dict
@@ -334,7 +334,7 @@ classDiagram
     }
 
     Agent --> IntentRouter
-    Agent --> KIVChecker
+    Agent --> FieldChecker
     Agent --> LedgerManager
     Agent --> BM25Retriever
     Agent --> Reranker
@@ -357,7 +357,7 @@ classDiagram
 | Intent Override (15%) | "Actually", "Instead" keywords | Reset constraints, restart search |
 | Boundary (5%) | "Doesn't matter", "I don't know" | Skip attribute, move to next |
 
-### 2. KIV Check
+### 2. Check Fields
 **Purpose:** Track required fields and turn limits
 
 - **Required Fields:** category, size, color, budget, material, use_case
@@ -629,7 +629,7 @@ def respond(session_id: str, user_message: str, turn: int, top_k: int) -> dict:
 ### Phase 2: Intent & Extraction (2-3 hours)
 - [ ] Intent Router (detect scenario)
 - [ ] Attribute Extractor (keywords + regex)
-- [ ] KIV Checker (field tracking)
+- [ ] Field Checker (field tracking)
 
 ### Phase 3: Reranking (2-3 hours)
 - [ ] Feature extraction
@@ -660,7 +660,7 @@ techjam-conversational-search/
 ├── src/                       # Your implementation
 │   ├── agent.py               # Main orchestrator
 │   ├── intent_router.py
-│   ├── kiv_checker.py
+│   ├── field_checker.py
 │   ├── ledger_manager.py
 │   ├── retriever.py
 │   ├── reranker.py

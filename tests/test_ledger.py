@@ -66,11 +66,9 @@ class LedgerHelpersTest(unittest.TestCase):
         self.ledger.set_constraint("s1", "color", "white")
         self.assertEqual(self.ledger.read("s1")["constraints"]["color"], ["white"])
 
-    def test_add_constraint_unknown_attribute_maps_to_other(self) -> None:
-        import warnings
-        with warnings.catch_warnings(record=True):
+    def test_add_constraint_unknown_attribute_raises(self) -> None:
+        with self.assertRaises(ValueError):
             self.ledger.add_constraint("s1", "unknown_attr", "value")
-        self.assertIn("other", self.ledger.read("s1")["constraints"])
 
     def test_clear_constraints_wipes_constraints_and_soft_preferences(self) -> None:
         self.ledger.add_constraint("s1", "color", "black")
