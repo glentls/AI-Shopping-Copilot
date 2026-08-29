@@ -31,7 +31,7 @@ BUDGET_RANGE_RE = re.compile(
     rf"(?:between|from)\s*{_CURRENCY}(?P<lo1>{_NUMBER})\s*(?:and|to|-)\s*{_CURRENCY}(?P<hi1>{_NUMBER})"
     rf"|{_CURRENCY_REQUIRED}(?P<lo2>{_NUMBER})\s*(?:-|to)\s*{_CURRENCY}(?P<hi2>{_NUMBER})"
     rf"|(?P<lo3>{_NUMBER})\s*(?:-|to)\s*(?P<hi3>{_NUMBER})\s*{_CURRENCY_WORD}"
-    rf"|budget(?: is| of| around)?\s*{_CURRENCY}(?P<lo4>{_NUMBER})\s*(?:-|to)\s*{_CURRENCY}(?P<hi4>{_NUMBER})"
+    rf"|budget(?:\s+(?:is|of|around|about|roughly|approximately))*\s*{_CURRENCY}(?P<lo4>{_NUMBER})\s*(?:-|to)\s*{_CURRENCY}(?P<hi4>{_NUMBER})"
     rf")",
     re.IGNORECASE,
 )
@@ -48,15 +48,25 @@ BUDGET_MAX_RE = re.compile(
     rf")",
     re.IGNORECASE,
 )
+# "budget" is an unambiguous trigger and stands alone. "about" and "around"
+# are not: "how about 10 to 20 litres" and "what about size 8" are ordinary
+# conversation, and reading them as a $10 ceiling silently distorts the whole
+# ranking. The vague triggers therefore require a currency marker or an
+# explicit currency word, exactly like bare "max".
 BUDGET_AROUND_RE = re.compile(
-    rf"(?:budget(?: is| of| around)?|around|about|roughly|approximately)\s*"
-    rf"{_CURRENCY}(?P<around>{_NUMBER})(?:\s*{_CURRENCY_WORD})?",
+    rf"(?:"
+    rf"budget(?:\s+(?:is|of|around|about|roughly|approximately))*\s*{_CURRENCY}(?P<around>{_NUMBER})"
+    rf"(?:\s*{_CURRENCY_WORD})?"
+    rf"|(?:around|about|roughly|approximately)\s*"
+    rf"(?:{_CURRENCY_REQUIRED}(?P<around_cur>{_NUMBER})"
+    rf"|(?P<around_word>{_NUMBER})\s*{_CURRENCY_WORD})"
+    rf")",
     re.IGNORECASE,
 )
 _WORDS = "|".join(sorted((re.escape(w) for w in WORD_NUMBERS), key=len, reverse=True))
 # "under fifty dollars", "no more than eighty", "a couple of hundred at most".
 BUDGET_WORD_RE = re.compile(
-    rf"(?:{_STRONG_MAX}|budget(?: is| of| around)?|around|about|roughly)\s*"
+    rf"(?:{_STRONG_MAX}|budget(?:\s+(?:is|of|around|about))*|around|about|roughly)\s*"
     rf"(?P<worded>{_WORDS})(?:\s*{_CURRENCY_WORD})?",
     re.IGNORECASE,
 )
@@ -116,7 +126,9 @@ def parse_budget(text: str) -> float | None:
         return _number(match.group("trailing"))
     match = BUDGET_AROUND_RE.search(source)
     if match:
-        return _number(match.group("around"))
+        approximate = (match.group("around") or match.group("around_cur")
+                       or match.group("around_word"))
+        return _number(approximate)
     for pattern, group in ((BUDGET_WORD_RE, "worded"),
                            (BUDGET_WORD_TRAILING_RE, "wtrailing")):
         match = pattern.search(source)

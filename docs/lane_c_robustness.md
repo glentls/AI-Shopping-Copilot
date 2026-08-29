@@ -24,7 +24,7 @@ Cases assert intended behaviour, not current behaviour, so the corpus is a bug
 list rather than a snapshot. Cases marked `soft` are genuinely debatable
 (non-USD currency, spelled-out numbers, idioms) and never gate CI.
 
-**Current: 283/283 hard (100%), 77/80 soft (96.2%).** All eleven hard failures and most of the soft ones are fixed; what remains is below.
+**Current: 301/301 hard (100%), 77/81 soft (95.1%).** All eleven hard failures and most of the soft ones are fixed; what remains is below.
 
 ## What was fixed
 
@@ -51,6 +51,26 @@ and sandals — the exact contradiction the intent-override scenario exists to
 punish. People correct themselves mid-breath far more often than they announce
 a change of mind. Added `no wait, wait no, hold on, on reflection, second
 thoughts, i meant, my mistake, correction`.
+
+### Budget trigger words hiding in ordinary conversation
+
+Found in a live session, and the reason this corpus earns its keep: **`how
+about 10 to 20 litres, waterproof`** was read as a **$10 ceiling**. The culprit
+is `about` — a legitimate budget cue (`about $35`) that also sits inside `how
+about`, `what about`, `thinking about`, `tell me about`. A phantom price ceiling
+is invisible in the reply and silently distorts the whole ranking.
+
+The corpus had `10 to 20 litres` and passed it; the bare phrase was never the
+problem. Now covered by a `conversational_number` family (18 cases) that puts a
+trigger word in front of every kind of non-price number.
+
+Same fix as `max` below: `budget` is an unambiguous trigger and stands alone,
+while `around/about/roughly/approximately` now require a currency marker or an
+explicit currency word. `budget is around 90` still parses — the qualifiers
+chain.
+
+**This one moved the public score, 0.8542 → 0.8550 (MRR +0.0025)**, so the
+simulator does occasionally trip it too.
 
 ### `air max 90` parsed as a $90 ceiling
 

@@ -129,6 +129,35 @@ CASES: list[Case] = [
     c("ships in 2 to 3 days", "numeric_not_budget", budget=None),
     c("2 to 4 weeks of wear", "numeric_not_budget", budget=None),
     c("holds a 13 inch laptop", "numeric_not_budget", budget=None),
+
+    # Conversational openers that happen to contain a budget trigger word.
+    # "how about" carries "about"; "at most" and "max" hide in product names.
+    # Found in a live session: "how about 10 to 20 litres, waterproof" was
+    # being read as a $10 ceiling, which silently distorts the whole ranking.
+    c("how about 10 to 20 litres, waterproof", "conversational_number",
+      ("feature", "waterproof"), budget=None),
+    c("how about 50", "conversational_number", budget=None),
+    c("what about size 10", "conversational_number", budget=None),
+    c("I'm thinking about 20 litres", "conversational_number", budget=None),
+    c("tell me about the 30 litre one", "conversational_number", budget=None),
+    c("how about something in cotton", "conversational_number",
+      ("material", "cotton"), budget=None),
+    c("what about 2 inch heels", "conversational_number", budget=None),
+    c("how about a 40 litre pack", "conversational_number", budget=None),
+    c("talk to me about 15 inch laptops", "conversational_number", budget=None),
+    c("what do you think about 3 pairs", "conversational_number", budget=None),
+    c("around the 20 litre mark", "conversational_number", budget=None),
+    c("roughly 30 litres", "conversational_number", budget=None),
+    c("approximately 25 cm long", "conversational_number", budget=None),
+    c("air max 270", "conversational_number", budget=None),
+    c("at most 3 pockets", "conversational_number", budget=None, soft=True,
+      note="'at most' is budget language, but 3 pockets is a count"),
+
+    # The same trigger words WITH a currency marker must still parse.
+    c("how about something around $50", "conversational_number", budget=50.0),
+    c("what about under $30", "conversational_number", budget=30.0),
+    c("my budget is around 90", "conversational_number", budget=90.0),
+    c("budget around fifty dollars", "conversational_number", budget=50.0),
     c("fits 5 to 10 kg", "numeric_not_budget", budget=None),
 
     # ---------------------------------------------------------------------
