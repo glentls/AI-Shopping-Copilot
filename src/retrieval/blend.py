@@ -150,15 +150,17 @@ def rerank_candidates(
         candidate.score = -float(base_rank) + slot_contribution + budget_contribution
 
         if candidate.components.get("exact", 0.0) > 0:
-            candidate.why = "matches a specific requirement you mentioned"
+            candidate.why = "it matches a specific requirement you mentioned"
         elif best_match is not None:
-            candidate.why = f"matches your {best_match[2]} preference"
-        elif candidate.components.get("dense", 0.0) > candidate.components.get("bm25", 0.0):
-            candidate.why = "semantically matches your request"
+            candidate.why = f"it matches your {best_match[2]} preference"
+        elif candidate.components.get("dense", 0.0) > candidate.components.get(
+            "bm25", 0.0
+        ):
+            candidate.why = "it semantically matches your request"
         elif candidate.components.get("bm25", 0.0) > 0:
-            candidate.why = "strong keyword match for your request"
+            candidate.why = "it is a strong keyword match for your request"
         else:
-            candidate.why = "popular option while preferences are broad"
+            candidate.why = "it is a popular option while preferences are broad"
 
         tie_data[candidate.parent_asin] = (
             candidate.components.get("profile", 0.0),

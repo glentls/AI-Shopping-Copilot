@@ -4,7 +4,7 @@ Owns `src/policy/{state,question,message}.py`, `tools/bench.py`,
 `tests/test_lane_c.py`. Reproduce everything below with:
 
 ```bash
-python3 -m tools.build_index      # ~28s -> artifacts/
+python3 -m tools.build_index      # one-time local artifacts; see lane_b_notes
 python3 -m tools.bench            # metrics, per scenario, first-hit histogram
 python3 -m tools.bench --depth    # where the target really ranks
 python3 -m tools.bench --verify   # replay loop still matches the evaluator
@@ -14,10 +14,10 @@ python3 -m tools.bench --verify   # replay loop still matches the evaluator
 
 | | score | hit@10 | MRR | MTTC | mean turns to first hit |
 |---|---|---|---|---|---|
-| **overall** | **0.8586** | 0.985 | 0.666 | 2.68 | **2.55** |
-| buying (80) | 0.8473 | 0.975 | 0.624 | 2.36 | 2.14 |
+| **overall** | **0.8541** | 0.985 | 0.651 | 2.68 | **2.55** |
+| buying (80) | 0.8492 | 0.975 | 0.630 | 2.36 | 2.14 |
 | browsing (80) | 0.8742 | 1.000 | 0.672 | 2.38 | 2.38 |
-| intent_override (30) | 0.8451 | 0.967 | 0.753 | 4.20 | 3.97 |
+| intent_override (30) | 0.8101 | 0.967 | 0.636 | 4.20 | 3.97 |
 | boundary (10) | 0.8638 | 1.000 | 0.686 | 3.10 | 3.10 |
 
 Baseline on entry was 0.7483. Only 3 sessions now miss. Recommendation selection
@@ -89,21 +89,25 @@ answers to budget, material, color, size, style, use_case and feature — asking
 `brand` or `category` here is a guaranteed dead turn. **Re-measure this the
 moment customer messages become natural language.**
 
-**Two refusals, not one, stand the wildcard down.** A boundary customer refuses
-whatever they are asked first and then answers normally. Giving up after a
-single refusal was implemented, measured, and reverted: boundary MTTC 4.00 →
-4.90. `TJ_DECLINE_PATIENCE` controls it.
+**Two refusals, not one, stand the wildcard down.** They are counted across the
+current intent even if a concrete question intervenes; an override starts a new
+count. A boundary customer refuses whatever they are asked first and then
+answers normally. Giving up after a single refusal was implemented, measured,
+and reverted: boundary MTTC 4.00 → 4.90. `TJ_DECLINE_PATIENCE` controls it. Once
+the wildcard and every concrete slot are exhausted, `ask_attribute` becomes
+`null` instead of forcing the same known-dead question again.
 
 ## Overrides and boundaries
 
-*Override.* On an override cue, held values are retracted **only where the new
-message contradicts them**. "Actually, what I need is leather" when leather is
-already held is the customer stressing a priority, not changing one; retracting
-there throws away a correct constraint. Retraction flips `polarity`, it never
-deletes — `state.excluded()` feeds a negative rerank signal, and nothing in the
-pipeline hard-filters, so a retraction that turns out to be wrong is recoverable.
-The same transition clears `state.shown_recommendations`, starting a fresh
-recommendation epoch for the new intent.
+*Override.* A local correction such as "actually, leather instead" retracts
+contradictory values in the named slot. The broader "ignore my earlier
+preference" retires the replaceable preference from the opener even when the new
+value belongs to another slot; it preserves the product category and constraints
+learned on intervening turns. A value explicitly reasserted in the override
+remains live. Retraction flips `polarity`, it never deletes —
+`state.excluded()` feeds a negative rerank signal, and nothing hard-filters the
+candidate set. The same transition clears `state.shown_recommendations`,
+starting a fresh recommendation epoch for the new intent.
 
 *Boundary.* "No preference" adds the slot to `state.unanswerable`, and the
 scorer never offers it again. When the customer does not name the slot, it
@@ -115,12 +119,9 @@ reranker scores one point per live value — so saying a thing twice outranked a
 better overall match. Repeats now fold, and the emphasis is recorded as
 `confidence`.
 
-That fold is the entire 0.0009 regression, and it is worth understanding: the
-duplicate happened to double-weight exactly the constraint an intent_override
-re-asserts, which is the one the customer just said matters most. The accident
-was doing real work (override MRR 0.626 → 0.607). **The principled recovery is
-for `rerank` to weight by `SlotValue.confidence`, which it currently ignores** —
-see the handoff below.
+The reranker now weights the folded value by its customer confidence and the
+confidence of the catalog source, preserving emphasis without counting one fact
+twice.
 
 ## Findings
 
@@ -137,13 +138,19 @@ candidates not yet shown under this intent.
 |---|---|---|---|---|
 | fixed silent-turn paging | 0.8544 | 0.980 | **0.672** | 2.865 |
 | literal session-wide exclusion | 0.7452 | 0.860 | 0.557 | 3.600 |
-| **current-intent exclusion** | **0.8586** | **0.985** | 0.666 | **2.680** |
+| current-intent exclusion at landing | **0.8586** | **0.985** | 0.666 | **2.680** |
+| + semantically correct broad overrides | 0.8541 | **0.985** | 0.651 | **2.680** |
 
 A literal session-wide rule is wrong. Intent-override recommendations cannot
 convert before the new intent is sent, so the eventual target may already have
 appeared without ending the session. Keeping those exclusions collapsed override
 hit rate to 0.133. Clearing them in `_apply_override` preserves override hit rate
 at 0.967 while ordinary turns remain repetition-free.
+
+The merge follow-up applies the unseen filter before question scoring and
+message composition too. Entropy is therefore measured over products that can
+actually be returned, and the explanation always describes the first eligible
+recommendation rather than a filtered-out former top candidate.
 
 ```python
 ranked = [
@@ -157,26 +164,21 @@ touch it.** This was raised first and landed only on explicit instruction; treat
 it as a merge point when branches come together. No Lane B change was needed —
 `search()` already returns 300 candidates and `rerank()` keeps them all.
 
-**2. `rerank` should weight by `SlotValue.confidence` (Lane B, open).** It adds
-a flat 1.0 per matched live value, so the state cannot express that one
-constraint matters more than another — which is exactly what an override is
-telling us. Worth ~0.02 MRR on the override sessions.
+**2. Confidence-weighted reranking (landed).** Slot contributions multiply
+customer confidence by catalog-source confidence, so a structured/title match
+can move farther than a description-only inference and repeated emphasis is
+represented without duplicate values.
 
-**3. Ranking is now the whole game (Lane B, open).** In **200 of 200** sessions
-the target is retrieved inside the top 300 — recall is perfect and nothing is
-missing from the index. If the target ranked 1st whenever it is retrieved the
-score would be **0.9881**. With hit rate at 0.985, essentially all remaining
-headroom is MRR: only 96 of 197 hits land at rank 1.
+**3. Ranking is now the main headroom (Lane B, open).** Hit rate is 0.985 and
+105 of 197 hits land at rank 1. Most remaining technical-score headroom is MRR,
+not additional retrieval reach.
 
-**4. The extractor understands about half of what customers say (Lane A,
-open).** `extract_slots` produces no slot value at all for 378 of 800 constraint
-strings in the evaluator's intent cards (52.8% coverage). `rayon` and `fabric`
-are in the evaluator's own `MATERIALS` list but missing from our material
-lexicon, and the evaluator inserts a matched material as the *first hard
-constraint*. Closures have no slot at all (`Pull On` 27, `Zipper` 16, `Button`
-11, `Drawstring` 6, `Buckle` 4, `Snap` 4), nor do care instructions (`Hand Wash
-Only` 18, `Machine Wash` 15). `Imported` (95) is genuinely meaningless and
-should stay unextracted.
+**4. Natural-language coverage remains the main understanding risk (Lane A,
+open).** The extractor now covers rayon, broader materials, closure types, and
+care features, but it remains deterministic phrase matching. Unseen
+paraphrases, compound colors, brands, fashion subcultures, and non-US sizing can
+still miss canonical slots even though their raw text remains available to
+retrieval.
 
 ## `tools/bench.py`
 

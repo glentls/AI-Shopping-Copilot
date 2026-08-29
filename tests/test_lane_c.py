@@ -12,6 +12,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.attributes import AttributeTable
 from src.contracts import Candidate, ConversationState
@@ -47,6 +48,7 @@ def say(state: ConversationState, message: str, turn: int, asked: str | None = N
     update(state, message, turn)
     if asked:
         state.asked.append(asked)
+        state.question_history.append((turn, asked))
         state.last_asked = asked
 
 
@@ -83,6 +85,34 @@ class TestOverride(unittest.TestCase):
         say(state, "Actually, ignore my earlier preference. What I need is: leather.", 2)
         self.assertEqual(state.active("material"), ["leather"])
         self.assertEqual(state.excluded("material"), [])
+
+    def test_broad_override_replaces_initial_preference_across_slots(self):
+        state = make_state()
+        say(state, "I'm looking for watches. Stainless Steel Band", 1, asked="other")
+        say(state, "For that, what matters is: waterproof.", 2, asked="other")
+
+        say(
+            state,
+            "Actually, ignore my earlier preference. What I need is: black.",
+            3,
+        )
+
+        self.assertIn("stainless steel", state.excluded("material"))
+        self.assertEqual(state.active("color"), ["black"])
+        self.assertIn("waterproof", state.active("feature"))
+
+    def test_broad_override_does_not_erase_later_values_in_the_new_slot(self):
+        state = make_state()
+        say(state, "I'm looking for boots. cotton", 1, asked="other")
+        say(state, "For that, what matters is: comfortable.", 2, asked="other")
+        say(
+            state,
+            "Actually, ignore my earlier preference. What I need is: waterproof.",
+            3,
+        )
+
+        self.assertIn("cotton", state.excluded("material"))
+        self.assertCountEqual(state.active("feature"), ["comfortable", "waterproof"])
 
     def test_retracted_value_can_be_revived(self):
         state = make_state()
@@ -166,14 +196,15 @@ class TestQuestionChoice(unittest.TestCase):
         ranked = dict(score_slots(state, make_candidates(), TABLE))
         self.assertNotIn("material", ranked)
 
-    def test_always_asks_something(self):
-        """A null ask_attribute is not a saved turn -- the simulator answers it
-        with 'ask me about one specific attribute' and we lose the turn."""
-        state = make_state(
-            asked=list(TABLE.slots()), unanswerable=set(TABLE.slots()), turn=9
-        )
+    def test_stops_asking_after_every_preference_is_exhausted(self):
+        state = make_state(asked=list(TABLE.slots()), unanswerable=set(TABLE.slots()))
+        say(state, "I'm looking for boots", 1, asked="other")
+        say(state, "I don't have an additional preference for other.", 2, asked="brand")
+        say(state, "I don't have a preference for brand.", 3, asked="other")
+        say(state, "I don't have an additional preference for other.", 4)
+
         attribute, _ = choose_question(state, make_candidates(), TABLE)
-        self.assertIsNotNone(attribute)
+        self.assertIsNone(attribute)
 
     def test_bundles_extra_topics(self):
         """Only ask_attribute is scored, so the prose is free upside."""
@@ -221,6 +252,27 @@ class TestWildcardPricing(unittest.TestCase):
         attribute, _ = choose_question(state, make_candidates(), TABLE)
         self.assertNotEqual(attribute, "other")
 
+    def test_interleaved_refusals_still_stand_the_wildcard_down(self):
+        state = make_state()
+        say(state, "I'm looking for boots", 1, asked="other")
+        say(state, "I don't have an additional preference for other.", 2, asked="brand")
+        say(state, "I don't have a preference for brand.", 3, asked="other")
+        say(state, "I don't have an additional preference for other.", 4)
+
+        self.assertEqual(wildcard_declines(state), 2)
+        self.assertEqual(other_value(state), 0.0)
+
+    def test_override_reopens_the_wildcard_for_the_new_intent(self):
+        state = make_state()
+        say(state, "I'm looking for boots", 1, asked="other")
+        say(state, "I don't have an additional preference for other.", 2, asked="other")
+        say(state, "I don't have an additional preference for other.", 3)
+        self.assertEqual(other_value(state), 0.0)
+
+        say(state, "Actually, ignore my earlier preference. I need cotton.", 4)
+        self.assertEqual(wildcard_declines(state), 0)
+        self.assertGreater(other_value(state), 0.0)
+
 
 class TestMessage(unittest.TestCase):
     def test_acknowledges_only_what_this_turn_taught(self):
@@ -248,6 +300,14 @@ class TestMessage(unittest.TestCase):
         say(state, "I don't have an additional preference for other.", 2, asked="other")
         text = compose_message(state, make_candidates(), "other", [])
         self.assertNotIn("stop asking", text)
+
+    def test_exhausted_customer_gets_recommendations_without_another_question(self):
+        state = make_state()
+        say(state, "I need boots", 1, asked="other")
+        say(state, "I don't have an additional preference for other.", 2)
+        text = compose_message(state, make_candidates(), None, [])
+        self.assertNotIn("Could you tell me", text)
+        self.assertNotIn("It would help to know", text)
 
     def test_budget_is_spoken_not_echoed_raw(self):
         """Budget is stored as a bare number. "Got it -- comfortable and 80"
@@ -308,8 +368,7 @@ MINI_CATALOG = [
 
 
 class TestAgentContract(unittest.TestCase):
-    """Every turn must return a question AND recommendations. A question with
-    no recommendations throws away a free chance at a hit."""
+    """Every turn recommends; useful questions accompany those results."""
 
     @classmethod
     def setUpClass(cls):
@@ -369,6 +428,28 @@ class TestAgentContract(unittest.TestCase):
             self.assertEqual(len(current), 3)
             self.assertTrue(current.isdisjoint(seen))
             seen.update(current)
+
+    def test_question_and_message_use_only_unseen_candidates(self):
+        self.agent.reset("s5", {})
+        state = self.agent._states["s5"]
+        state.shown_recommendations.add("B001")
+        candidates = [
+            Candidate("B001", 2.0, why="it is the already shown option"),
+            Candidate("B002", 1.0, why="it matches the unseen cotton option"),
+        ]
+
+        with (
+            patch.object(self.agent.retriever, "search", return_value=candidates),
+            patch.object(self.agent.retriever, "rerank", return_value=candidates),
+            patch("starter.agent.choose_question", return_value=(None, [])) as choose,
+        ):
+            response = self.agent.respond("s5", "Show me another option", 1, top_k=1)
+
+        passed_candidates = choose.call_args.args[1]
+        self.assertEqual([candidate.parent_asin for candidate in passed_candidates], ["B002"])
+        self.assertEqual(response["recommendations"][0]["parent_asin"], "B002")
+        self.assertIn("unseen cotton option", response["message"])
+        self.assertNotIn("already shown option", response["message"])
 
     def test_override_moves_the_ranking(self):
         """The whole point of retraction: after an override the ranking must

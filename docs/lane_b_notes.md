@@ -10,7 +10,7 @@ The retriever uses three independent routes and reciprocal-rank fusion (RRF):
 
 BM25, cosine, and exact-phrase raw scores are never added together. BM25 and dense ranks are fused with RRF; the exact-phrase route is a 0.275-weight hedge for the public simulator's copied catalog clauses. Dense contributes zero when an exact catalog clause is present, 0.10 for generic browsing, and 1.0 for natural non-generic turns where semantic-only candidates need to surface. `TJ_DENSE_WEIGHT` can override the route-aware value for ablation runs.
 
-No constraint hard-filters candidates. A retracted or negative slot can move a product down, but cannot remove it from the candidate set. Query construction drops no-preference/filler replies. BM25 retains all informative lexical evidence, matching Lane C's folded state behavior; semantic retrieval and exact-phrase matching retire stale pre-override intent. Popularity (`rating_number`) and aggregate profile preference tags are final tie-breakers. Every candidate records scorer components and a short `why` clause.
+No constraint hard-filters candidates. A retracted or negative slot can move a product down, but cannot remove it from the candidate set. Query construction drops no-preference/filler replies and scrubs retracted values from BM25, semantic, and exact-phrase evidence. A broad override removes the replaceable preference clause from the opener while retaining constraints learned on later pre-override turns. Popularity (`rating_number`) and aggregate profile preference tags are final tie-breakers. Every candidate records scorer components and a short `why` clause.
 
 ## Build and artifacts
 

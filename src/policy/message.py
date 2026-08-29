@@ -129,7 +129,7 @@ def _dropped(state: ConversationState) -> list[str]:
     ]
 
 
-def _opening(state: ConversationState) -> str:
+def _opening(state: ConversationState, ask_attribute: Optional[str]) -> str:
     """Acknowledge what just happened, not the whole accumulated pile."""
     message = _last_customer(state)
     learned = _new_values(state)
@@ -154,10 +154,15 @@ def _opening(state: ConversationState) -> str:
     if NO_PREFERENCE_RE.search(message):
         # They just declined a question. Say so, and make clear we will not
         # ask it again rather than pretending we learned something.
-        # `asked` already has this turn's question appended, so [-1] is what we
-        # are about to ask and [-2] is the one they just declined.
-        previous = state.asked[-2] if len(state.asked) > 1 else None
-        repeating = len(state.asked) > 1 and state.asked[-1] == previous
+        previous = next(
+            (
+                action
+                for question_turn, action in reversed(state.question_history)
+                if question_turn < state.turn
+            ),
+            None,
+        )
+        repeating = ask_attribute is not None and ask_attribute == previous
         if repeating:
             # Promising to drop a topic and then asking it again in the same
             # breath is the incoherence a judge will notice first. We are about
@@ -222,7 +227,7 @@ def _template(
     ask_attribute: Optional[str],
     extra_topics: list[str],
 ) -> str:
-    parts = [_opening(state), _recommend(state, cands),
+    parts = [_opening(state, ask_attribute), _recommend(state, cands),
              _question(state, ask_attribute, extra_topics)]
     return " ".join(part for part in parts if part)
 

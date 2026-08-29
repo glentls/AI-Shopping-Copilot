@@ -40,6 +40,10 @@ class ConversationState:
     slots: dict[str, list[SlotValue]] = field(default_factory=dict)
     unanswerable: set[str] = field(default_factory=set)  # boundary: no preference
     asked: list[str] = field(default_factory=list)       # attributes already asked
+    # Turn-stamped question history. `asked` remains the compact set-like view
+    # used by the slot policy; this record stays aligned when the policy stops
+    # asking after the customer has run out of preferences.
+    question_history: list[tuple[int, str]] = field(default_factory=list)
     last_asked: Optional[str] = None                     # what we asked last turn
     history: list[tuple[str, str]] = field(default_factory=list)  # (role, text)
     budget_max: Optional[float] = None

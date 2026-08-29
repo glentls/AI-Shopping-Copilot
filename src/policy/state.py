@@ -18,7 +18,13 @@ that appends both hands the reranker a doubled slot bonus for the same fact.
 from __future__ import annotations
 
 from src.contracts import ConversationState, SlotValue
-from src.extract import detect_no_preference, detect_override, extract_slots, parse_budget
+from src.extract import (
+    detect_no_preference,
+    detect_override,
+    extract_slots,
+    parse_budget,
+    replaces_earlier_preference,
+)
 
 
 def _absorb(state: ConversationState, slot: str, incoming: SlotValue) -> None:
@@ -37,11 +43,11 @@ def _absorb(state: ConversationState, slot: str, incoming: SlotValue) -> None:
         if held.value == incoming.value:
             held.polarity = incoming.polarity
             # A repeat is emphasis: the customer has now said this twice. Raise
-            # confidence rather than stacking a second copy. Lane B's reranker
-            # currently scores every live value at a flat 1.0 and ignores this
-            # field -- see docs/lane_c_notes.md, it is worth ~0.02 MRR on the
-            # override sessions once rerank weights by it.
-            held.confidence = min(1.0, max(held.confidence, incoming.confidence) + 0.05)
+            # confidence rather than stacking a second copy. The reranker uses
+            # this value together with catalog-source confidence.
+            held.confidence = min(
+                1.0, max(held.confidence, incoming.confidence) + 0.05
+            )
             return
     state.add(slot, incoming)
 
@@ -73,16 +79,52 @@ def _apply_override(
     # customer changes direction. Start a fresh recommendation epoch now so
     # the new intent may reuse them.
     state.shown_recommendations.clear()
-    targets = set(incoming) if retracted == ["*"] else set(retracted)
-    for slot in targets:
+
+    targets: dict[str, set[str] | None] = {}
+    if replaces_earlier_preference(user_message):
+        # The evaluator (and normal shopping language) introduces the stable
+        # category first, then the replaceable preference after a full stop:
+        # "I'm looking for watches. Stainless Steel Band". Re-extract only
+        # that preference clause so a cross-slot override can retire it without
+        # erasing constraints learned on the intervening turns.
+        first_message = next(
+            (text for role, text in state.history if role == "customer"), ""
+        )
+        preference_text = (
+            first_message.split(".", 1)[1]
+            if "." in first_message
+            else first_message
+        )
+        scratch = ConversationState(state.session_id, state.user_profile)
+        initial_preference = extract_slots(preference_text, 1, scratch)
+        for slot, values in initial_preference.items():
+            # With no separate category clause, category is the durable product
+            # type rather than the replaceable modifier ("a cotton shirt").
+            if slot == "category" and "." not in first_message:
+                continue
+            targets[slot] = {value.value for value in values if value.polarity}
+
+    # A narrower correction ("actually, leather instead") still replaces the
+    # prior values in the slot it names. This is also the safe fallback when a
+    # broad cue contains no preference we can extract from the opener.
+    if not targets:
+        named_targets = set(incoming) if retracted == ["*"] else set(retracted)
+        targets.update((slot, None) for slot in named_targets)
+
+    for slot, replaceable in targets.items():
         # Only retract what the new message actually CONTRADICTS. "Actually,
         # what I need is leather" when we already had leather is a customer
         # restating their priority, not changing it -- retracting there throws
         # away a correct constraint and the ranking gets worse.
         asserted = {value.value for value in incoming.get(slot, []) if value.polarity}
+        retired_budget = False
         for held in state.slots.get(slot, []):
-            if held.polarity and held.value not in asserted:
+            eligible = replaceable is None or held.value in replaceable
+            if held.polarity and eligible and held.value not in asserted:
                 held.polarity = False
+                retired_budget = retired_budget or slot == "budget"
+        if retired_budget and not asserted:
+            state.budget_max = None
 
 
 def update(state: ConversationState, user_message: str, turn: int) -> ConversationState:

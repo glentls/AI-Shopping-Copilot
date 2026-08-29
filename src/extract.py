@@ -266,6 +266,25 @@ def detect_override(text: str) -> list[str]:
     return ordered or ["*"]
 
 
+_EARLIER_PREFERENCE_RE = re.compile(
+    r"\b(?:ignore|forget|drop|set aside|replace)\b[^.!?]{0,48}"
+    r"\b(?:my\s+)?(?:earlier|previous|old)\s+"
+    r"(?:preference|request|requirement|choice)\b",
+    re.IGNORECASE,
+)
+
+
+def replaces_earlier_preference(text: str) -> bool:
+    """Whether an override explicitly replaces the earlier preference.
+
+    This is deliberately narrower than :func:`detect_override`. A local
+    correction such as "actually, blue instead" replaces the held colour;
+    "ignore my earlier preference" refers to the separate preference supplied
+    alongside the initial product category and can cross slot boundaries.
+    """
+    return bool(_EARLIER_PREFERENCE_RE.search(text or ""))
+
+
 def detect_no_preference(text: str) -> list[str]:
     """Return named unconstrained slots, or ``["*"]`` for the last question."""
     source = text or ""

@@ -29,7 +29,9 @@ from src.retrieval import Retriever
 
 ARTIFACTS_DIR = os.environ.get("TECHJAM_ARTIFACTS", "artifacts")
 DEBUG = bool(os.environ.get("TECHJAM_DEBUG"))
-FALLBACK_POOL = 50
+# Ten evaluator turns can consume ten unseen recommendations each. Keep enough
+# popularity fallbacks to preserve that contract even if retrieval fails late.
+FALLBACK_POOL = 100
 
 
 def _popular_asins(catalog_path: Path, limit: int) -> list[str]:
@@ -92,14 +94,29 @@ class Agent:
         candidates = self.retriever.search(state)
         candidates = self.retriever.rerank(candidates, state)
 
-        ask_attribute, extra_topics = choose_question(state, candidates, self.table)
+        # The merged no-repeat rule applies to the whole customer-facing turn,
+        # not just the final ASIN slice. Questions must measure the candidates
+        # still eligible to be shown, and the prose must explain the product
+        # that will actually be returned first.
+        eligible_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.parent_asin not in state.shown_recommendations
+        ]
+
+        ask_attribute, extra_topics = choose_question(
+            state, eligible_candidates, self.table
+        )
         if ask_attribute not in ASK_ATTRIBUTES:
             ask_attribute = "other" if ask_attribute else None
         if ask_attribute:
             state.asked.append(ask_attribute)
+            state.question_history.append((turn, ask_attribute))
             state.last_asked = ask_attribute
 
-        message = compose_message(state, candidates, ask_attribute, extra_topics)
+        message = compose_message(
+            state, eligible_candidates, ask_attribute, extra_topics
+        )
         state.history.append(("agent", message))
 
         # A continued scored session proves that every product already shown
@@ -109,8 +126,7 @@ class Agent:
         # because pre-override recommendations were made for a different need.
         ranked = [
             candidate.parent_asin
-            for candidate in candidates
-            if candidate.parent_asin not in state.shown_recommendations
+            for candidate in eligible_candidates
         ][:top_k]
         ranked = self._pad(ranked, top_k, state.shown_recommendations)
         state.shown_recommendations.update(ranked)

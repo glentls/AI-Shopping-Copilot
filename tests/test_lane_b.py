@@ -133,19 +133,40 @@ class RetrieverTest(unittest.TestCase):
             )
         self.assertAlmostEqual(reranked[0].components["slot"], 6.0)
 
-    def test_query_hygiene_drops_filler_and_old_override_text(self) -> None:
+    def test_query_hygiene_drops_replaced_value_but_keeps_later_constraints(self) -> None:
         self.assertFalse(Retriever._informative("I don't have an additional preference for brand."))
         self.assertFalse(Retriever._informative("Those options are not quite right yet."))
         state = ConversationState("session", {})
         state.history.extend([
             ("customer", "I'm looking for shoes. I prefer leather."),
+            ("customer", "For that, what matters is: waterproof."),
             ("customer", "Actually, ignore my earlier preference. What I need is: cotton."),
         ])
         state.add("material", SlotValue("leather", 0.9, 1, polarity=False))
-        state.add("material", SlotValue("cotton", 0.9, 2))
-        query = self.retriever._semantic_query_text(state).lower()
-        self.assertNotIn("leather", query)
-        self.assertIn("cotton", query)
+        state.add("feature", SlotValue("waterproof", 0.9, 2))
+        state.add("material", SlotValue("cotton", 0.9, 3))
+
+        for query in (
+            self.retriever._query_text(state),
+            self.retriever._semantic_query_text(state),
+            " ".join(self.retriever._exact_phrases(state)),
+        ):
+            with self.subTest(query=query):
+                lowered = query.lower()
+                self.assertNotIn("leather", lowered)
+                self.assertIn("waterproof", lowered)
+                self.assertIn("cotton", lowered)
+
+    def test_reasserted_value_is_not_scrubbed_from_queries(self) -> None:
+        state = ConversationState("session", {})
+        state.history.extend([
+            ("customer", "I need leather shoes."),
+            ("customer", "Actually, leather is still what I need."),
+        ])
+        state.add("material", SlotValue("leather", 0.9, 1, polarity=False))
+        state.add("material", SlotValue("leather", 0.95, 2))
+
+        self.assertIn("leather", self.retriever._query_text(state).lower())
 
     def test_search_stays_within_turn_budget(self) -> None:
         state = ConversationState("session", {"preference_tags": ["comfort"]})

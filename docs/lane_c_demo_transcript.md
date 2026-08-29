@@ -15,25 +15,25 @@ python3 -m tools.bench --only public_0003 --output ""
 
 ## 1. Intent override — `public_0003`
 
-Target `B09YMTWDXJ`, Casio Men's Wrist Watch AQ-800E-7A. **Hit on turn 4 at
-rank 1.** The customer replaces a preference on turn 3.
+Target `B09YMTWDXJ`, Casio Men's Wrist Watch AQ-800E-7A. **Hit on turn 3 at
+rank 2.** The customer replaces a preference on turn 3.
 
 > **[1] Customer:** I'm looking for Watches Wrist Watches. Stainless Steel Band
 >
-> **Agent:** Got it — stainless steel. These ten are my closest matches. It would
-> help to know anything else that matters to you, a brand you like, or a colour
-> you lean towards.
+> **Agent:** Got it — watch and stainless steel. Here are ten to look at — my top
+> pick because it matches your stainless steel preference. It would help to know
+> anything else that matters to you, a brand you like, or what you will mostly
+> use it for.
 > `ask_attribute=other`
 
-The opener names one constraint, so it is acknowledged and three topics go out
-in one breath. Only `other` is scored; the other two ride along free in the
-prose.
+The opener names the durable category and a replaceable material preference.
+Only `other` is scored; the two concrete topics ride along in the prose.
 
 > **[2] Customer:** For that, what matters is: Water Resistant; 3 Year Battery.
 >
-> **Agent:** Got it — waterproof. Here is the current top ten. Could you tell me
-> anything else that matters to you, a brand you like, or what you will mostly
-> use it for?
+> **Agent:** Got it — waterproof. Here are ten to look at — my top pick because
+> it matches a specific requirement you mentioned. Could you tell me anything
+> else that matters to you, a brand you like, or what you will mostly use it for?
 > `ask_attribute=other`
 
 Two constraints in one answer — the wildcard earning its keep.
@@ -41,34 +41,20 @@ Two constraints in one answer — the wildcard earning its keep.
 > **[3] Customer:** Actually, ignore my earlier preference. What I need is: Water
 > Resistant.
 >
-> **Agent:** Understood — waterproof it is, and I have set the earlier preference
-> aside. Here are ten that fit best, closest match first. It would help to know
-> anything else that matters to you, a brand you like, or what you will mostly
-> use it for.
-> `ask_attribute=other`
+> **Agent:** Understood — I have dropped stainless steel and I am going by
+> waterproof now. Here are ten to look at — my top pick because it matches a
+> specific requirement you mentioned. It would help to know anything else that
+> matters to you, a brand you like, or what you will mostly use it for.
+> `ask_attribute=other` — **target returned at rank 2**
 
-The override turn. The agent names the constraint the customer just re-asserted
-rather than answering with "the new requirement". Note what it does *not* do:
-`water resistant` was already held, so this is the customer stressing a
-priority, not changing one, and `stainless steel` is **not** retracted. A
-retract-on-every-override rule would have thrown away a correct constraint here
-and pushed the target down.
+The override is cross-slot: the opener's stainless-steel preference is retired
+even though the new requirement is a feature. The category and waterproof
+constraint learned on turn 2 remain live. The recommendation exclusion set is
+cleared at the same transition, so products considered under the old intent may
+be reconsidered immediately.
 
-> **[4] Customer:** For that, what matters is: Day / Date Indicator; Stainless
-> Steel Band.
->
-> **Agent:** Noted — I have factored that in. These ten are my closest matches.
-> Could you tell me anything else that matters to you, a brand you like, or what
-> you will mostly use it for?
-> `ask_attribute=other` — **target returned at rank 1**
-
-Neither new phrase is in the lexicon and `stainless steel` is already held, so
-nothing is newly learned — the agent acknowledges the customer instead of
-claiming progress it did not make. The raw words still reach the ranker through
-the query text, and the target lands first.
-
-Final state: `material=[stainless steel]`, `feature=[waterproof]`, nothing
-retracted, no slot asked twice.
+Final state: `category=[watch]`, `material=[]` with `stainless steel` retracted,
+and `feature=[waterproof]`.
 
 ---
 
@@ -79,9 +65,9 @@ rank 1.** The customer declines the first question outright.
 
 > **[1] Customer:** I'm looking for Tees & Blouses Tunics, but I'm still exploring.
 >
-> **Agent:** Happy to help — let me start with a few options. These ten are my
-> closest matches. It would help to know anything else that matters to you, a
-> brand you like, or what you will mostly use it for.
+> **Agent:** Got it — shirt and top. Here are ten to look at — my top pick because
+> it matches your shirt preference. It would help to know anything else that
+> matters to you, a brand you like, or any features that matter.
 > `ask_attribute=other`
 
 A browsing opener with no constraint at all, and recommendations go out anyway —
@@ -90,8 +76,9 @@ a question with no recommendations throws away a free chance at a hit.
 > **[2] Customer:** I don't have a preference for other; please use your judgment.
 >
 > **Agent:** Understood — let me try once more, then I will go with my best
-> judgment. Here is the current top ten. Could you tell me anything else that
-> matters to you, a brand you like, or what you will mostly use it for?
+> judgment. Here are ten to look at — my top pick because it matches your shirt
+> preference. Could you tell me anything else that matters to you, a brand you
+> like, or any features that matter?
 > `ask_attribute=other`
 
 The refusal. The slot is marked unanswerable so it is never asked again as a
@@ -104,9 +91,10 @@ giving up here costs boundary MTTC 4.00 → 4.90.
 > **[3] Customer:** For that, what matters is: polyester; 3X women tops care:
 > Hand wash or machine wash in gentle; Hang to dry; No ironing; No shrinkage.
 >
-> **Agent:** Got it — polyester. Here are ten that fit best, closest match first.
+> **Agent:** Got it — women, polyester, and machine washable. Here are ten to
+> look at — my top pick because it matches a specific requirement you mentioned.
 > It would help to know anything else that matters to you, a brand you like, or
-> what kind of item you have in mind.
+> what you will mostly use it for.
 > `ask_attribute=other` — **target returned at rank 1**
 
 Patience paid: one more wildcard turn recovered the whole constraint set from a

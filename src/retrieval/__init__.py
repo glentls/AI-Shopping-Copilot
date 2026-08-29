@@ -9,7 +9,8 @@ from pathlib import Path
 
 from src.attributes import AttributeTable
 from src.contracts import SLOTS, Candidate, ConversationState
-from src.lexicons import NO_PREFERENCE_RE, OVERRIDE_CUES
+from src.extract import replaces_earlier_preference
+from src.lexicons import NO_PREFERENCE_RE
 
 from .blend import reciprocal_rank_fusion, rerank_candidates
 from .bm25 import ARTIFACT_NAME as BM25_ARTIFACT, BM25Index, build_bm25_index
@@ -24,9 +25,6 @@ _GENERIC_ONLY_RE = re.compile(
     r"i(?:'m| am) still exploring|nothing else|no idea)[.! ]*$",
     re.IGNORECASE,
 )
-_OVERRIDE_RE = re.compile("|".join(re.escape(cue) for cue in OVERRIDE_CUES), re.IGNORECASE)
-
-
 class Retriever:
     def __init__(
         self,
@@ -71,32 +69,35 @@ class Retriever:
     @staticmethod
     def _without_excluded(text: str, state: ConversationState) -> str:
         for slot in SLOTS:
-            for value in state.slots.get(slot, []):
-                if value.polarity or not value.value:
+            for value in state.excluded(slot):
+                if not value:
                     continue
-                text = re.sub(rf"\b{re.escape(value.value)}\b", " ", text, flags=re.IGNORECASE)
+                text = re.sub(rf"\b{re.escape(value)}\b", " ", text, flags=re.IGNORECASE)
         return text
+
+    @staticmethod
+    def _intent_messages(state: ConversationState) -> list[str]:
+        """Informative customer text with a replaced opener preference retired.
+
+        A broad override replaces the preference after the opener's category
+        clause, not useful constraints disclosed on turns two and three. Slot
+        exclusions scrub extracted stale values below; trimming this one raw
+        clause also handles catalog phrases the deterministic extractor does
+        not understand.
+        """
+        messages = [
+            text for role, text in state.history
+            if role == "customer" and Retriever._informative(text)
+        ]
+        if messages and any(
+            replaces_earlier_preference(text) for text in messages[1:]
+        ):
+            messages[0] = messages[0].split(".", 1)[0]
+        return messages
 
     def _semantic_query_text(self, state: ConversationState) -> str:
         """Current intent only, suitable for semantic retrieval."""
-        messages = [
-            text for role, text in state.history
-            if role == "customer" and self._informative(text)
-        ]
-        # Once the customer says to ignore an earlier preference, raw history
-        # before that point is unsafe. Preserve the initial category clause,
-        # then use the override and everything learned after it.
-        override_at = next(
-            (
-                index
-                for index in range(len(messages) - 1, -1, -1)
-                if _OVERRIDE_RE.search(messages[index])
-            ),
-            None,
-        )
-        if override_at is not None and override_at > 0:
-            category_clause = messages[0].split(".", 1)[0]
-            messages = [category_clause, *messages[override_at:]]
+        messages = self._intent_messages(state)
         said = " ".join(messages)
         said = self._without_excluded(said, state)
         live_values = " ".join(
@@ -108,17 +109,9 @@ class Retriever:
         return " ".join(f"{said} {live_values}".split())
 
     def _query_text(self, state: ConversationState) -> str:
-        """All informative lexical evidence plus the current live slots.
-
-        Exact catalog words disclosed earlier remain useful BM25 evidence even
-        after an override. Contradicted values affect the soft slot reranker;
-        they never hard-delete an otherwise strong lexical candidate.
-        """
-        said = " ".join(
-            text
-            for role, text in state.history
-            if role == "customer" and self._informative(text)
-        )
+        """Current lexical evidence plus live slots, with stale values scrubbed."""
+        said = " ".join(self._intent_messages(state))
+        said = self._without_excluded(said, state)
         live_values = " ".join(
             value.value
             for slot in SLOTS
@@ -127,32 +120,17 @@ class Retriever:
         )
         return " ".join(f"{said} {live_values}".split())
 
-    @staticmethod
-    def _exact_phrases(state: ConversationState) -> list[str]:
+    @classmethod
+    def _exact_phrases(cls, state: ConversationState) -> list[str]:
         phrases: list[str] = []
-        messages = [
-            text for role, text in state.history
-            if role == "customer" and Retriever._informative(text)
-        ]
-        override_at = next(
-            (
-                index
-                for index in range(len(messages) - 1, -1, -1)
-                if _OVERRIDE_RE.search(messages[index])
-            ),
-            None,
-        )
-        if override_at is not None:
-            messages = messages[override_at:]
-        for text in messages:
+        for text in cls._intent_messages(state):
             match = _EXACT_CLAUSE_RE.search(text)
             if not match:
                 continue
-            phrases.extend(
-                part.strip(" .")
-                for part in match.group(1).split(";")
-                if part.strip(" .")
-            )
+            for part in match.group(1).split(";"):
+                cleaned = cls._without_excluded(part, state).strip(" .")
+                if cleaned:
+                    phrases.append(cleaned)
         return phrases
 
     def search(self, state: ConversationState, top_n: int = 300) -> list[Candidate]:

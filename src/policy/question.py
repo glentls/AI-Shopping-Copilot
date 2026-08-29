@@ -28,6 +28,7 @@ from typing import Optional
 
 from src.attributes import AttributeTable
 from src.contracts import Candidate, ConversationState
+from src.extract import detect_override
 from src.lexicons import NO_PREFERENCE_RE
 from src.policy.state import learned_on
 
@@ -120,42 +121,41 @@ def score_slots(
     return scored
 
 
-def _replies_to(state: ConversationState) -> dict[str, list[int]]:
-    """What each action we asked actually returned, this session.
+def _answered(state: ConversationState) -> list[tuple[int, str, str]]:
+    """(reply turn, question, reply) records for the current intent."""
+    said = [text for role, text in state.history if role == "customer"]
+    intent_start = max(
+        (
+            turn
+            for turn, text in enumerate(said, start=1)
+            if detect_override(text)
+        ),
+        default=1,
+    )
+    answered: list[tuple[int, str, str]] = []
+    for question_turn, action in state.question_history:
+        reply_turn = question_turn + 1
+        if reply_turn < intent_start or reply_turn > len(said):
+            continue
+        answered.append((reply_turn, action, said[reply_turn - 1]))
+    return answered
 
-    `state.asked[i]` is the attribute we asked on turn i+1; the customer's
-    answer to it is the message that opens turn i+2, and `learned_on` counts
-    the facts that message taught us. Turns we have not heard back from yet are
-    not evidence, so they are left out entirely.
-    """
+
+def _replies_to(state: ConversationState) -> dict[str, list[int]]:
+    """What each action returned under the current intent."""
     observed: dict[str, list[int]] = {}
-    for index, action in enumerate(state.asked):
-        reply_turn = index + 2
-        if reply_turn > state.turn:
-            break
+    for reply_turn, action, _ in _answered(state):
         observed.setdefault(action, []).append(learned_on(state, reply_turn))
     return observed
 
 
-def _answered(state: ConversationState) -> list[tuple[str, str]]:
-    """(question we asked, the reply it drew), oldest first.
-
-    At the moment we choose, `state.asked` holds turns 1..turn-1 and the
-    customer has spoken on turns 1..turn, so the reply to `asked[i]` is the
-    customer's message i+1. Questions still awaiting an answer are dropped.
-    """
-    said = [text for role, text in state.history if role == "customer"]
-    return [(action, said[i + 1]) for i, action in enumerate(state.asked) if i + 1 < len(said)]
-
-
 def wildcard_declines(state: ConversationState) -> int:
-    """Consecutive most-recent turns where "anything else?" drew a refusal."""
-    streak = 0
-    for action, reply in reversed(_answered(state)):
-        if action != "other" or not NO_PREFERENCE_RE.search(reply):
-            break
-        streak += 1
-    return streak
+    """Wildcard refusals in this intent, even when other questions intervene."""
+    return sum(
+        1
+        for _, action, reply in _answered(state)
+        if action == "other" and NO_PREFERENCE_RE.search(reply)
+    )
 
 
 def other_value(state: ConversationState) -> float:
@@ -198,13 +198,17 @@ def choose_question(
     asks about use_case, material and budget in one breath and the customer
     answers all three. Only ask_attribute is scored, so bundling is free upside.
 
-    Always returns something to ask. A turn that asks nothing is not a saved
-    turn: the simulator answers a null ask_attribute with "Ask me about one
-    specific attribute", so it costs a turn and teaches nothing.
+    Returns ``None`` only after every concrete topic is spent and the customer
+    has exhausted the wildcard. At that point another forced question is known
+    to teach nothing and creates a visible dialogue loop.
     """
     ranked = score_slots(state, cands, table)
+    wildcard = other_value(state)
 
-    if not ranked or ranked[0][1] < other_value(state):
+    if not ranked:
+        return ("other", []) if wildcard > 0.0 else (None, [])
+
+    if ranked[0][1] < wildcard:
         # The wildcard takes the scored slot; the best concrete slots still go
         # into the prose, so a simulator that reads the message loses nothing.
         return "other", [slot for slot, _ in ranked[:BUNDLE_SIZE - 1]]
