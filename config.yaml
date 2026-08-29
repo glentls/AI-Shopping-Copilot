@@ -1,0 +1,48 @@
+# Every tunable in the skeleton lives here. Nothing below should ever be hard-coded in src/.
+seed: 42
+
+contract:
+  top_k: 10
+  max_turns: 10
+
+timeouts:
+  # seconds. Any component call exceeding this is treated as a failure and falls back to Null.
+  dialog_seconds: 2.0
+  memory_seconds: 2.0
+  retrieval_seconds: 5.0
+  ranking_seconds: 5.0
+
+retrieval:
+  # SQLite FTS5 candidate pool size before ranking. Ported from starter/agent.py's implicit
+  # LIMIT top_k; the skeleton widens it so a future ranker has something to rerank.
+  candidate_pool_size: 50
+  # bm25(products, ...) column weights, in column order (parent_asin is UNINDEXED so its weight
+  # is inert but kept for positional clarity). Verbatim values carried over from the shipped
+  # starter/agent.py weak baseline so the skeleton reproduces its score exactly.
+  bm25_weights:
+    parent_asin: 0.0
+    title: 6.0
+    categories: 4.0
+    features: 2.5
+    details: 2.5
+    store: 1.5
+    description: 1.0
+  max_query_terms: 40
+  index_batch_size: 1000
+
+ranking:
+  # Depth of the candidate list the reranker is allowed to reorder. NullReranker ignores this
+  # (it returns input order unchanged) but a real reranker must respect it.
+  rerank_depth: 30
+
+fallback:
+  # If a session ends with fewer than top_k valid recommendations (e.g. an empty-query miss),
+  # pad deterministically with the highest-rating_number catalog items not already present.
+  pad_pool_size: 200
+
+eval:
+  fast_sample_count: 50
+  dev_holdout:
+    dev_count: 150
+    holdout_count: 50
+    split_seed: 42
