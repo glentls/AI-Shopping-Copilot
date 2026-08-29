@@ -101,15 +101,63 @@ class MessageParserAttributeTest(unittest.TestCase):
 
 
 class CatalogVocabTest(unittest.TestCase):
-    def test_vocab_improves_category_and_brand_matching(self) -> None:
+    def setUp(self) -> None:
         categories, brands = load_catalog_vocab("data/catalog.jsonl")
-        self.assertIn("boots", categories)
-        self.assertIn("earrings", categories)
-        self.assertGreater(len(brands), 1000)
+        self.categories = categories
+        self.brands = brands
+        self.parser = MessageParser(known_categories=categories, known_brands=brands)
 
-        parser = MessageParser(known_categories=categories, known_brands=brands)
-        parsed = parser.parse("I need a pair of boots.")
+    def test_vocab_improves_category_and_brand_matching(self) -> None:
+        self.assertIn("boots", self.categories)
+        self.assertIn("earrings", self.categories)
+        self.assertGreater(len(self.brands), 1000)
+        parsed = self.parser.parse("I need a pair of boots.")
         self.assertEqual(parsed.attributes.get("category"), "boots")
+
+    def test_ambiguous_material_category_terms_not_double_assigned(self) -> None:
+        # "cotton"/"denim"/"fleece" are real materials AND real catalog
+        # categories; "bamboo"/"canvas" are real materials AND real store
+        # names. Only material should be assigned.
+        for word in ["cotton", "denim", "fleece", "bamboo", "canvas"]:
+            with self.subTest(word=word):
+                parsed = self.parser.parse(f"I want something in {word}.")
+                self.assertEqual(parsed.attributes.get("material"), word)
+                self.assertNotIn("category", parsed.attributes)
+                self.assertNotIn("brand", parsed.attributes)
+
+    def test_generic_word_brand_false_positive_blocked(self) -> None:
+        # Real catalog store names "Key" and "Not" would otherwise false
+        # positive on ordinary sentences.
+        parsed = self.parser.parse(
+            "Those options are not quite right yet. Ask me about one specific attribute."
+        )
+        self.assertNotIn("brand", parsed.attributes)
+
+    def test_hyphenated_category_matches_despite_tokenization(self) -> None:
+        # Catalog stores "t-shirts" with a literal hyphen; query tokenization
+        # strips punctuation, so both sides must normalize the same way.
+        for message in ["I need a t-shirt.", "I need a t shirt."]:
+            with self.subTest(message=message):
+                parsed = self.parser.parse(message)
+                self.assertEqual(parsed.attributes.get("category"), "t shirts")
+
+    def test_merged_compound_word_category_alias(self) -> None:
+        cases = {
+            "tshirt": "t shirts",
+            "flipflops": "flip flops",
+            "carryon luggage": "carry ons",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                parsed = self.parser.parse(message)
+                self.assertEqual(parsed.attributes.get("category"), expected)
+
+    def test_compound_alias_does_not_leak_fragment_as_brand(self) -> None:
+        # "crossbody" expands toward "cross body" for category matching, but
+        # the split fragment "cross" must not separately false-positive
+        # against an unrelated store also named "Cross".
+        parsed = self.parser.parse("I want a crossbody bag.")
+        self.assertNotEqual(parsed.attributes.get("brand"), "cross")
 
 
 if __name__ == "__main__":
