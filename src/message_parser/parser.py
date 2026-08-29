@@ -39,12 +39,18 @@ class ParsedMessage:
     is_override: bool = False
     is_no_preference: bool = False
     is_vague: bool = False
+    intent: str | None = None
+    category: str | None = None
+    product: str | None = None
 
     def to_dict(self) -> dict:
         return {
             "raw_text": self.raw_text,
             "keywords": self.keywords,
             "attributes": self.attributes,
+            "intent": self.intent,
+            "category": self.category,
+            "product": self.product,
             "signals": {
                 "is_override": self.is_override,
                 "is_no_preference": self.is_no_preference,
@@ -228,6 +234,18 @@ class MessageParser:
         result.is_vague = pattern_vague or (
             not structured_keys and not result.is_no_preference and not result.is_override
         )
+
+        if result.is_override:
+            result.intent = "intent_override"
+        elif result.is_no_preference:
+            result.intent = "boundary"
+        elif result.is_vague:
+            result.intent = "browsing"
+        else:
+            result.intent = "buying" if structured_keys else "browsing"
+
+        result.category = result.attributes.get("category")
+        result.product = result.attributes.get("brand")
 
         return result
 

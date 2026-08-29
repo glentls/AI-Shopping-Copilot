@@ -211,6 +211,19 @@ def _parse_llm_response(raw: str, original_text: str) -> ParsedMessage:
         if not structured_keys:
             result.is_vague = True
 
+    structured_keys = set(result.attributes) - {"feature"}
+    if result.is_override:
+        result.intent = "intent_override"
+    elif result.is_no_preference:
+        result.intent = "boundary"
+    elif result.is_vague:
+        result.intent = "browsing"
+    else:
+        result.intent = "buying" if structured_keys else "browsing"
+
+    result.category = result.attributes.get("category")
+    result.product = result.attributes.get("brand")
+
     return result
 
 
