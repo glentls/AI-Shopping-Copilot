@@ -6,11 +6,11 @@ The retriever uses three independent routes and reciprocal-rank fusion (RRF):
 
 - SQLite FTS5 BM25 over title, features, description, categories, store, and details. The index is built once on disk; `Agent.__init__` opens it read-only.
 - `sentence-transformers/all-MiniLM-L6-v2` at revision `5641a7880f40ebf4035d05e60c5f9b7a9c272c84`, using its 384-dimensional ONNX export. A small local WordPiece implementation avoids `transformers`, `sentence-transformers`, and PyTorch.
-- Confidence-weighted slot matches and soft penalties for negative polarity and over-budget products. `TJ_SLOT_WEIGHT` defaults to 3.0 rank places.
+- Confidence-weighted slot matches and soft penalties for negative polarity and over-budget products. A sweep after Lane C landed selected `TJ_SLOT_WEIGHT=12`: it produces the best MRR/TechnicalScore in the 10–15 neighborhood while preserving the complete 300-candidate list.
 
 BM25, cosine, and exact-phrase raw scores are never added together. BM25 and dense ranks are fused with RRF; the exact-phrase route is a 0.35-weight hedge for the public simulator's copied catalog clauses. Dense has weight 0.10 when an exact clause or the generic “still exploring” opener supplies stronger lexical evidence, and weight 1.0 for natural non-generic turns where semantic-only candidates need to surface. `TJ_DENSE_WEIGHT` can override the confidence-aware value for ablation runs.
 
-No constraint hard-filters candidates. A retracted or negative slot can move a product down, but cannot remove it from the candidate set. Query construction drops no-preference/filler replies and retires raw text and exact phrases from before the latest intent override. Popularity (`rating_number`) and aggregate profile preference tags are final tie-breakers. Every candidate records scorer components and a short `why` clause.
+No constraint hard-filters candidates. A retracted or negative slot can move a product down, but cannot remove it from the candidate set. Query construction drops no-preference/filler replies. BM25 retains all informative lexical evidence, matching Lane C's folded state behavior; semantic retrieval and exact-phrase matching retire stale pre-override intent. Popularity (`rating_number`) and aggregate profile preference tags are final tie-breakers. Every candidate records scorer components and a short `why` clause.
 
 ## Build and artifacts
 
@@ -20,7 +20,9 @@ Run from the repository root:
 python3 -m tools.build_index
 ```
 
-On the first run, the command downloads the pinned MiniLM ONNX model and vocabulary from Hugging Face. If ONNX Runtime is not installed, it installs version 1.22.1 into `artifacts/_vendor`; it does not modify the frozen environment files. This is the only one-off network step. Subsequent builds reuse the model and local runtime.
+On the first run, the command downloads the pinned MiniLM ONNX model and vocabulary from Hugging Face. If ONNX Runtime is not installed, it installs version 1.22.1 and NumPy into `artifacts/_vendor`; it does not modify the frozen environment files. This is the only one-off network step. Subsequent builds reuse the model and local runtime.
+
+NumPy is loaded lazily only when dense retrieval is constructed. Importing the starter, constructing an `Agent`, and running `tools.build_index --skip-dense` all work without NumPy or site packages. When dense dependencies or artifacts are absent, `Retriever` automatically keeps BM25 plus the exact-phrase route instead of failing the agent import.
 
 Measured on the 50,000-product catalog on an Apple ARM development machine:
 
@@ -49,14 +51,44 @@ dense retrieval execute concurrently before deterministic RRF:
 
 The isolated dense query is about 5.5 ms. Dynamic ONNX padding is important: a one-query batch is padded only to its actual token length rather than the 128-token catalog maximum. Profile-tag FTS ranks are cached by the normalized tag set.
 
-## Public-set ablation
+## Lane C integration and ranking results
 
-All rows use the same soft slot/budget reranker and popularity/profile tie-breaks. “Fused” additionally enables the exact-phrase hedge. Results are from `data/public_set.jsonl` after rebasing this branch onto `origin/main`.
+Lane C added deep recommendation paging after this branch's first benchmark. The current comparison therefore uses the new `origin/main` score of 0.8370, not the earlier 0.7483 wiring baseline.
+
+| Configuration | TechnicalScore | HitRate@10 | MRR | MTTC |
+|---|---:|---:|---:|---:|
+| Lane C `origin/main` | 0.8370 | 0.9850 | 0.6105 | 2.930 |
+| Rebased Lane B before fixes | 0.8163 | 0.9600 | 0.5905 | 3.045 |
+| Final fused ranking | **0.8445** | **0.9850** | **0.6261** | **2.790** |
+
+Public-set scorer ablation with the final confidence-aware soft reranker:
 
 | Retrieval mode | TechnicalScore | HitRate@10 | MRR | MTTC |
 |---|---:|---:|---:|---:|
-| BM25 only | 0.7054 | 0.8200 | 0.5088 | 3.860 |
-| Dense only | 0.3710 | 0.4400 | 0.2486 | 7.180 |
-| Fused BM25 + dense + exact | **0.7529** | **0.8700** | **0.5535** | **3.410** |
+| BM25 only | 0.8322 | 0.9850 | 0.5922 | 2.900 |
+| Dense only | 0.5219 | 0.6600 | 0.3150 | 6.130 |
+| Fused BM25 + dense + exact | **0.8445** | **0.9850** | **0.6261** | **2.790** |
 
-The untouched post-rebase wiring baseline reproduced at 0.7483 (HitRate@10 0.8650, MRR 0.5541, MTTC 3.520). The dense-only public result is expected to understate its private-set value: public customer messages copy listing text, while dense retrieval is aimed at natural paraphrases such as “for a trip” and “comfortable” versus vacation/walking and cushioning/arch-support language.
+The final per-scenario result is:
+
+| Scenario | HitRate@10 | MRR | MTTC |
+|---|---:|---:|---:|
+| Buying | 0.975 | 0.602 | 2.40 |
+| Browsing | 1.000 | 0.629 | 2.46 |
+| Intent override | 0.967 | 0.629 | 4.53 |
+| Boundary | 1.000 | 0.783 | 3.30 |
+
+The final rank-at-first-hit profile has 96 of 197 hits at rank 1. `--depth` confirms all 200 targets occur within the 300-candidate ranking: the three scored misses finish at depths 11–20 (one) and 51–100 (two). No candidate list is truncated for the policy pager.
+
+Slot-weight sweeps with the final fusion settings:
+
+| `TJ_SLOT_WEIGHT` | TechnicalScore | HitRate@10 | MRR | MTTC |
+|---:|---:|---:|---:|---:|
+| 1 | 0.8400 | 0.985 | 0.609 | 2.75 |
+| 3 | 0.8410 | 0.985 | 0.611 | 2.75 |
+| 5 | 0.8430 | 0.985 | 0.618 | 2.74 |
+| 11 | 0.8436 | 0.985 | 0.623 | 2.79 |
+| **12** | **0.8445** | **0.985** | **0.626** | **2.79** |
+| 13 | 0.8420 | 0.985 | 0.617 | 2.79 |
+
+`python3 -m tools.bench --verify` reports exact agreement between replay and the untouched evaluator for hit rate, MRR, MTTC, and TechnicalScore.
