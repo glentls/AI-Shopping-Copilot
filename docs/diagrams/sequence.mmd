@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant U as User
+    participant IR as Intent Router
+    participant KIV as KIV Check
+    participant L as Ledger
+    participant BM as BM25
+    participant RR as Reranker
+    participant DE as Decision
+    participant R as Response
+
+    U->>IR: User Message (turn N)
+    IR->>IR: Detect Scenario
+    IR->>KIV: Route with scenario type
+    
+    KIV->>KIV: Check required fields
+    KIV->>KIV: Check turn limit
+    
+    alt Turn > 10
+        KIV->>R: Force recommend
+    else Turn <= 10
+        KIV->>L: Update ledger
+    end
+    
+    L->>L: Store session_id, search_key, attributes
+    L->>BM: Pass search query
+    
+    BM->>BM: Build query from ledger
+    BM->>BM: Execute FTS5 search
+    BM->>RR: Return top 100 candidates
+    
+    RR->>RR: Extract features per candidate
+    RR->>RR: Apply feature importance weights
+    RR->>RR: Calculate final scores
+    RR->>DE: Pass ranked results + confidence
+    
+    alt Confidence < Threshold
+        DE->>R: Return clarifying question
+        R->>U: What size do you prefer?
+    else Confidence >= Threshold
+        DE->>R: Return top 10 recommendations
+        R->>U: Here are my top 10 picks!
+    end
+    
+    Note over U,R: Loop until HIT or Turn 10

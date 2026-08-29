@@ -1,0 +1,80 @@
+flowchart TD
+    subgraph INPUT
+        A[User Message]
+    end
+
+    subgraph INTENT_ROUTER["INTENT ROUTER"]
+        B[Parse Intent]
+        B1{Detect Scenario}
+        B1 -->|Buying| B2[Buying Strategy]
+        B1 -->|Browsing| B3[Browsing Strategy]
+        B1 -->|Intent Override| B4[Reset & Restart]
+        B1 -->|Boundary| B5[Skip Strategy]
+    end
+
+    subgraph KIV_CHECK["KIV CHECK"]
+        C[Check Required Fields]
+        C1{Turn Limit OK?}
+        C2[Track Unfilled Fields]
+    end
+
+    subgraph LEDGER["LEDGER MANAGER"]
+        D[Create/Update Ledger]
+        D1[session_id]
+        D2[search_key]
+        D3[product_attributes]
+        D4[conversation_history]
+        D5[asked_attributes]
+    end
+
+    subgraph RETRIEVAL["BM25 RETRIEVAL"]
+        E[Build Query]
+        E1[BM25 Index Search]
+        E2[Get Top-K Candidates]
+    end
+
+    subgraph RERANKER["RERANKER MODEL"]
+        F[Load Candidates]
+        F1[Extract Features]
+        F2[Score by Feature Importance]
+        F3[Rerank Candidates]
+        F4[Calculate Confidence Score]
+    end
+
+    subgraph DECISION["DECISION ENGINE"]
+        G{Confidence >= Threshold?}
+    end
+
+    subgraph ASK_PATH["ASK PATH"]
+        H[Select Best Question]
+        H1[Generate Clarifying Question]
+        H2[Update Ledger]
+    end
+
+    subgraph RECOMMEND_PATH["RECOMMEND PATH"]
+        I[Return Top 10 Products]
+        I1[Format Response]
+        I2[Update Ledger]
+    end
+
+    subgraph OUTPUT
+        J[Response to User]
+    end
+
+    A --> B
+    B --> B1
+    B2 & B3 & B4 & B5 --> C
+    C --> C1
+    C1 -->|Yes| C2
+    C1 -->|No, Turn 10| I
+    C2 --> D
+    D --> D1 & D2 & D3 & D4 & D5
+    D --> E
+    E --> E1 --> E2
+    E2 --> F
+    F --> F1 --> F2 --> F3 --> F4
+    F4 --> G
+    G -->|No, Low Confidence| H
+    G -->|Yes, High Confidence| I
+    H --> H1 --> H2 --> J
+    I --> I1 --> I2 --> J

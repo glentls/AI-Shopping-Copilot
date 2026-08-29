@@ -1,0 +1,11 @@
+flowchart LR
+    A[User Message] --> B[Intent Router]
+    B --> C[KIV Check]
+    C --> D[Ledger Manager]
+    D --> E[BM25 Retrieval]
+    E --> F[Reranker Model]
+    F --> G{Confidence?}
+    G -->|Low| H[Ask Question]
+    G -->|High| I[Return Top 10]
+    H --> J[Response]
+    I --> J[Response]
