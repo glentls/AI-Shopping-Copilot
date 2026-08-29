@@ -70,6 +70,52 @@ class Agent:
             cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
         self.connection.commit()
 
+    def retrieve(
+        self,
+        search_key: dict[str, list[str]],
+        top_k: int = 10,
+    ) -> list[str]:
+        """Return a ranked list of parent_asin strings matching *search_key*.
+
+        Parameters
+        ----------
+        search_key:
+            Mapping of attribute name -> list of acceptable values.
+            Example: ``{"color": ["red", "crimson"], "style": ["casual"]}``
+            Values within the same attribute are OR-ed; different attributes
+            are AND-ed so every attribute must match.
+        top_k:
+            Maximum number of results to return.
+
+        Returns
+        -------
+        list[str]
+            Ranked ``parent_asin`` values, best match first.
+        """
+        # Build one FTS5 sub-expression per attribute: (val1 OR val2 OR ...)
+        # Then AND all sub-expressions together: expr1 AND expr2 AND ...
+        attribute_exprs: list[str] = []
+        for values in search_key.values():
+            tokens: list[str] = []
+            for value in values:
+                tokens.extend(_terms(str(value)))
+            if not tokens:
+                continue
+            # OR the individual tokens for this attribute
+            or_clause = " OR ".join(f'"{t}"' for t in dict.fromkeys(tokens))
+            attribute_exprs.append(f"({or_clause})")
+
+        if not attribute_exprs:
+            return []
+
+        expression = " AND ".join(attribute_exprs)
+        rows = self.connection.execute(
+            "SELECT parent_asin FROM products WHERE products MATCH ? "
+            "ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) LIMIT ?",
+            (expression, top_k),
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def reset(self, session_id: str, user_profile: dict) -> None:
         # The profile is anonymized and may be used for personalization.
         self._sessions.add(session_id)
