@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import json
 import threading
-import warnings
 from contextlib import contextmanager
 from typing import Generator
 
@@ -104,8 +103,7 @@ class LedgerService:
     def add_constraint(self, session_id: str, attribute: str, value: str) -> None:
         """Append a value to an attribute (e.g. user adds another color)."""
         if attribute not in ALLOWED_ATTRIBUTES:
-            warnings.warn(f"Unknown attribute '{attribute}', storing under 'other'.")
-            attribute = "other"
+            raise ValueError(f"Invalid attribute '{attribute}'. Must be one of {ALLOWED_ATTRIBUTES}")
         with self._session_lock(session_id):
             existing = self._store[session_id]["constraints"].get(attribute, [])
             if value not in existing:
@@ -115,8 +113,7 @@ class LedgerService:
     def set_constraint(self, session_id: str, attribute: str, value: str) -> None:
         """Overwrite an attribute entirely (e.g. user changes their mind)."""
         if attribute not in ALLOWED_ATTRIBUTES:
-            warnings.warn(f"Unknown attribute '{attribute}', storing under 'other'.")
-            attribute = "other"
+            raise ValueError(f"Invalid attribute '{attribute}'. Must be one of {ALLOWED_ATTRIBUTES}")
         with self._session_lock(session_id):
             self._store[session_id]["constraints"][attribute] = [value]
 
@@ -134,8 +131,7 @@ class LedgerService:
 
     def mark_attribute_asked(self, session_id: str, attribute: str) -> None:
         if attribute not in ALLOWED_ATTRIBUTES:
-            warnings.warn(f"Unknown attribute '{attribute}', storing under 'other'.")
-            attribute = "other"
+            raise ValueError(f"Invalid attribute '{attribute}'. Must be one of {ALLOWED_ATTRIBUTES}")
         with self._session_lock(session_id):
             asked = self._store[session_id]["asked_attributes"]
             if attribute not in asked:
