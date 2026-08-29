@@ -24,92 +24,82 @@ Cases assert intended behaviour, not current behaviour, so the corpus is a bug
 list rather than a snapshot. Cases marked `soft` are genuinely debatable
 (non-USD currency, spelled-out numbers, idioms) and never gate CI.
 
-**Current: 272/283 hard (96.1%), 31/80 soft (38.8%).**
+**Current: 283/283 hard (100%), 77/80 soft (96.2%).** All eleven hard failures and most of the soft ones are fixed; what remains is below.
 
-## Findings, worst first
+## What was fixed
 
-### 1. Negation leaves the rejected value ACTIVE — 8 failures
+All eleven hard failures, and 46 of the 49 soft ones. **The public score did
+not move by a single digit — 0.8542 before and after, zero delta on every
+metric and every scenario.** That is the argument for the work: the simulator
+never phrases a rejection, a self-correction or a price this way, so none of it
+was ever visible to the score, and none of it could regress it.
 
-`NEGATION_CUES` covers `not, no, without, avoid, anything but, except, don't
-want`. It misses `nothing`, `hate`, `never`, `can't`:
+### Negation left the rejected value ACTIVE (8 cases)
 
-| input | result |
+`NEGATION_CUES` covered `not/no/without/avoid/except` but missed how people
+actually reject things, so `I hate polyester`, `nothing in pink`, `never black`
+and `I can't wear nylon` all kept the value as a **live preference**. The
+reranker scores a point per active value, so the agent hunted for exactly what
+the customer had ruled out — worse than extracting nothing, and worse still as
+Lane A's extraction improves. Added `nothing, never, hate, dislike, can't,
+cannot, rather not, steer clear of, stay away from, allergic to`.
+
+### `no wait` was not an override cue
+
+`sneakers → actually boots → "no wait, sandals"` ended holding **both** boots
+and sandals — the exact contradiction the intent-override scenario exists to
+punish. People correct themselves mid-breath far more often than they announce
+a change of mind. Added `no wait, wait no, hold on, on reflection, second
+thoughts, i meant, my mistake, correction`.
+
+### `air max 90` parsed as a $90 ceiling
+
+`BUDGET_MAX_RE` accepted a bare `max` with no currency, and product names are
+full of it. This is the class reported as `10 to 20 litres`. Split the trigger:
+`under/below/less than/up to/within/at most` are unambiguous budget language and
+stand alone, while `max`/`maximum` now requires a currency marker or an explicit
+`dollars`.
+
+### Idioms no longer false-positive (0/15 → 15/15)
+
+`feeling blue`, `black friday`, `out of the blue`, `green with envy`, `watch
+out`, `top of the line`, `boot up the computer` all extracted a slot value.
+`IDIOM_PHRASES` is a blocklist of ~45 figurative phrases; a lexicon hit inside
+one of those spans is suppressed. This is not disambiguation and cannot
+generalize — it removes the false positives that actually occur. Worth
+remembering before anyone raises slot weight, which amplifies whatever is left.
+
+### Smaller gaps closed
+
+- Non-USD currency: `£`, `€`, `EUR`, `GBP`, `quid`, `bucks`, and the ceiling
+  stated after the number (`50 quid max`, `EUR 40 or less`).
+- Spelled-out amounts: `under fifty dollars`, `a couple of hundred at most`
+  (0/5 → 5/5).
+- Recipient inference: `a gift for my wife` → `category=women`, anchored on
+  `for/gift for/present for` only, at confidence 0.75 because it is inferred
+  rather than stated. A free category narrowing on a very common opener.
+- `for my morning run` → `use_case=running`; `for a job interview` → `formal`.
+
+## What is still open — 3 soft cases, deliberately
+
+| case | why it is left |
 |---|---|
-| `nothing in pink` | `color=pink` **active** |
-| `I hate polyester` | `material=polyester` **active** |
-| `never black` | `color=black` **active** |
-| `I can't wear nylon` | `material=nylon` **active** |
-| `can't stand synthetic fabrics` | `material=synthetic` **active** |
-| `nothing sleeveless` | `style=sleeveless` **active** |
+| `a bit less formal` | needs `less X` to negate `X`, but `less than $50` is budget language. A cue that catches one catches the other. |
+| `wool always makes me itch` | a complaint, not a negation. Requires reading consequence, not a cue word. |
+| `I want a black coat → make it white` | an implicit conflict with no override cue. Auto-retracting would need colour to be single-valued, and "black and white striped" is a real request. |
 
-This is worse than extracting nothing. The reranker adds a bonus per active
-value, so the agent actively hunts for the thing the customer just rejected,
-and the stronger Lane A's extraction gets the harder it chases. Severity is
-high because rejection is common in real dialogue and absent from the simulator.
-
-*Fix: extend `NEGATION_CUES` in `src/lexicons/__init__.py` (Lane A).* Note
-`_NEG_WINDOW` is 24 characters, so `"nothing waterproof, I don't need it"` also
-needs the cue to precede the value closely enough.
-
-### 2. `no wait` is not an override cue — 1 failure
-
-`show me sneakers → actually boots → no wait, sandals` ends holding **both**
-`boots` and `sandals`. `OVERRIDE_CUES` lacks `no wait`, `hold on`, `sorry, I
-meant`. Contradictory constraints ranked together is the exact failure the
-intent-override scenario is designed to punish.
-
-*Fix: extend `OVERRIDE_CUES` (Lane A).*
-
-### 3. A bare number after a model name reads as a price — 1 failure
-
-`air max 90` → budget `$90`. This is the class you reported as `10 to 20
-litres`; Lane A's hardened `parse_budget` fixed the unit case, but a number
-trailing a product/model name still slips through. 47 of 48 numeric-not-budget
-cases now pass, so the guard is close.
-
-*Fix: require currency or budget wording near a bare trailing number (Lane A).*
-
-### 4. Colour idioms always false-positive — 15 soft failures, 0/15
-
-`feeling blue`, `black friday`, `out of the blue`, `green with envy`, `silver
-lining`, `caught red handed`, `a navy veteran` all extract a colour. Same for
-`watch out` → `category=watch`, `top of the line` → `category=top`, `boot up
-the computer` → `category=boots`.
-
-Marked soft because the fix is genuinely hard — real disambiguation, not a word
-list — and the cost is one spurious soft slot value rather than a wrong hard
-constraint. Worth knowing before someone raises slot weight further: **every
-point of extra slot weight amplifies these too.**
-
-### 5. Smaller gaps
-
-- `for my morning run` misses `use_case=running` — the lexicon has `running`
-  and `jogging` but not the bare verb `run`.
-- Spelled-out amounts (`under fifty dollars`) never parse: 0/5 soft.
-- Non-USD (`under 50 euros`, `£60`, `50 quid`) is 4/7 soft. Defensible for a
-  US catalog; listed so the decision is deliberate.
-- Recipient inference (`a gift for my wife` → `women`) is 1/6 soft. Probably
-  worth having: it is a free category narrowing on a very common opener.
-
-## What already holds up
-
-Worth stating, because it is most of the corpus: budget parsing 32/32 including
-every range form; 47/48 numeric-not-budget; multi-slot sentences 10/10 (`black
-cotton long sleeve shirt under $30 for the gym` extracts all five plus the
-budget); rambling paragraphs 5/5; question forms 8/8; politeness-wrapped
-requests 7/7; degenerate input 10/10 with **no input in the corpus raising an
-exception**, which the evaluator would score as an outright miss.
-
-The multi-turn dialogues are strong: override 5/6, override scope 2/2 (changing
-colour does not drop material or use_case), restatement 2/2 (re-asserting a held
-value is emphasis, not a change — the expensive mistake to get wrong),
-boundary 4/4, accumulation 4/4, long 8-turn sessions 3/3.
+Each is a genuine semantic problem rather than a missing word, and each would
+cost more in false positives than it buys. They are marked `soft` in the corpus
+and never gate CI.
 
 ## CI
 
-`tests/test_robustness.py` gates two things without freezing the bugs:
+`tests/test_robustness.py` gates two invariants:
 
-1. **No input may ever raise** — absolute, all 363 cases, soft included.
-2. **No new hard failure** — `KNOWN_FAILURES` is an allowlist of the 11 above.
-   A failure outside it fails the build; a fixed one must be deleted from the
-   list or a second test fails. The list may only get shorter.
+1. **No input may ever raise** — absolute, all 363 cases, soft included. The
+   evaluator scores an exception as an outright miss.
+2. **No hard failure at all.** `KNOWN_FAILURES` is now empty and should stay
+   that way: a new case the pipeline cannot satisfy is either genuinely
+   debatable (mark it `soft`) or a bug to fix.
+
+Run `python3 -m tools.robustness --strict` to enforce the same check directly.

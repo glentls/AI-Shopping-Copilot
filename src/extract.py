@@ -6,17 +6,22 @@ import re
 
 from src.contracts import SLOTS, ConversationState, SlotValue
 from src.lexicons import (
+    IDIOM_RE,
     NEGATION_RE,
     NO_PREFERENCE_RE,
     OVERRIDE_RE,
     PATTERNS,
+    RECIPIENT_RE,
     SLOT_NAME_PATTERNS,
+    WORD_NUMBERS,
 )
 
 
 _NUMBER = r"\d{1,6}(?:,\d{3})*(?:\.\d{1,2})?"
-_CURRENCY = r"(?:US\s*)?(?:\$|USD\s*)?"
-_CURRENCY_REQUIRED = r"(?:US\s*\$|\$|USD\s*)"
+_CURRENCY = r"(?:US\s*)?(?:[$\u00a3\u20ac]|USD\s*|EUR\s*|GBP\s*)?"
+_CURRENCY_REQUIRED = r"(?:US\s*\$|[$\u00a3\u20ac]|USD\s*|EUR\s*|GBP\s*)"
+# Currency named after the number: "50 dollars", "40 euros", "50 quid".
+_CURRENCY_WORD = r"(?:dollars?|usd|euros?|eur|pounds?|gbp|quid|bucks?)"
 
 # Range patterns come before the one-sided patterns: "$50-100" means a maximum
 # of 100, not 50. A currency marker, "dollars", or explicit budget wording is
@@ -25,7 +30,7 @@ BUDGET_RANGE_RE = re.compile(
     rf"(?:"
     rf"(?:between|from)\s*{_CURRENCY}(?P<lo1>{_NUMBER})\s*(?:and|to|-)\s*{_CURRENCY}(?P<hi1>{_NUMBER})"
     rf"|{_CURRENCY_REQUIRED}(?P<lo2>{_NUMBER})\s*(?:-|to)\s*{_CURRENCY}(?P<hi2>{_NUMBER})"
-    rf"|(?P<lo3>{_NUMBER})\s*(?:-|to)\s*(?P<hi3>{_NUMBER})\s*(?:dollars?|usd)"
+    rf"|(?P<lo3>{_NUMBER})\s*(?:-|to)\s*(?P<hi3>{_NUMBER})\s*{_CURRENCY_WORD}"
     rf"|budget(?: is| of| around)?\s*{_CURRENCY}(?P<lo4>{_NUMBER})\s*(?:-|to)\s*{_CURRENCY}(?P<hi4>{_NUMBER})"
     rf")",
     re.IGNORECASE,
@@ -37,17 +42,36 @@ BUDGET_RANGE_RE = re.compile(
 _STRONG_MAX = r"under|below|less than|no more than|not over|up to|within|at most"
 BUDGET_MAX_RE = re.compile(
     rf"(?:"
-    rf"(?:{_STRONG_MAX})\s*{_CURRENCY}(?P<maximum>{_NUMBER})(?:\s*(?:dollars?|usd))?"
+    rf"(?:{_STRONG_MAX})\s*{_CURRENCY}(?P<maximum>{_NUMBER})(?:\s*{_CURRENCY_WORD})?"
     rf"|max(?:imum)?(?: of)?\s*(?:{_CURRENCY_REQUIRED}(?P<max_cur>{_NUMBER})"
-    rf"|(?P<max_word>{_NUMBER})\s*(?:dollars?|usd))"
+    rf"|(?P<max_word>{_NUMBER})\s*{_CURRENCY_WORD})"
     rf")",
     re.IGNORECASE,
 )
 BUDGET_AROUND_RE = re.compile(
     rf"(?:budget(?: is| of| around)?|around|about|roughly|approximately)\s*"
-    rf"{_CURRENCY}(?P<around>{_NUMBER})(?:\s*(?:dollars?|usd))?",
+    rf"{_CURRENCY}(?P<around>{_NUMBER})(?:\s*{_CURRENCY_WORD})?",
     re.IGNORECASE,
 )
+_WORDS = "|".join(sorted((re.escape(w) for w in WORD_NUMBERS), key=len, reverse=True))
+# "under fifty dollars", "no more than eighty", "a couple of hundred at most".
+BUDGET_WORD_RE = re.compile(
+    rf"(?:{_STRONG_MAX}|budget(?: is| of| around)?|around|about|roughly)\s*"
+    rf"(?P<worded>{_WORDS})(?:\s*{_CURRENCY_WORD})?",
+    re.IGNORECASE,
+)
+# The ceiling stated after the number: "50 quid max", "EUR 40 or less".
+BUDGET_TRAILING_RE = re.compile(
+    rf"{_CURRENCY}(?P<trailing>{_NUMBER})\s*(?:{_CURRENCY_WORD}\s*)?"
+    rf"(?:max(?:imum)?|or less|at most|tops)\b",
+    re.IGNORECASE,
+)
+BUDGET_WORD_TRAILING_RE = re.compile(
+    rf"(?P<wtrailing>{_WORDS})(?:\s*{_CURRENCY_WORD})?\s*"
+    rf"(?:max(?:imum)?|or less|at most|tops)\b",
+    re.IGNORECASE,
+)
+
 PRICE_RE = re.compile(rf"(?:US\s*)?\$\s*(?P<price>{_NUMBER})", re.IGNORECASE)
 
 # Numeric sizes need context; unconstrained numbers are commonly prices,
@@ -87,9 +111,17 @@ def parse_budget(text: str) -> float | None:
         ceiling = (match.group("maximum") or match.group("max_cur")
                    or match.group("max_word"))
         return _number(ceiling)
+    match = BUDGET_TRAILING_RE.search(source)
+    if match:
+        return _number(match.group("trailing"))
     match = BUDGET_AROUND_RE.search(source)
     if match:
         return _number(match.group("around"))
+    for pattern, group in ((BUDGET_WORD_RE, "worded"),
+                           (BUDGET_WORD_TRAILING_RE, "wtrailing")):
+        match = pattern.search(source)
+        if match:
+            return float(WORD_NUMBERS[re.sub(r"\s+", " ", match.group(group).lower())])
     match = PRICE_RE.search(source)
     return _number(match.group("price")) if match else None
 
@@ -167,15 +199,24 @@ def extract_slots(text: str, turn: int, state: ConversationState) -> dict[str, l
         return found
 
     seen: set[tuple[str, str, bool]] = set()
+    idioms = [(m.start(), m.end()) for m in IDIOM_RE.finditer(text)]
     for slot, entries in PATTERNS.items():
         for canonical, pattern in entries:
             for match in pattern.finditer(text):
                 if _is_no_preference_clause(text, match.start()):
                     continue
+                # "feeling blue" is not a colour preference.
+                if any(lo <= match.start() < hi for lo, hi in idioms):
+                    continue
                 polarity = not _is_negated(text, match.start())
                 surface = re.sub(r"[\s-]+", " ", match.group(0).casefold()).strip()
                 confidence = 0.95 if surface == canonical.casefold() else 0.90
                 _append(found, seen, slot, canonical, confidence, turn, polarity)
+
+    for value, pattern in RECIPIENT_RE.items():
+        if pattern.search(text):
+            # Softer than a stated preference: inferred, not said.
+            _append(found, seen, "category", value, 0.75, turn, True)
 
     for value, start in _dynamic_sizes(text):
         _append(found, seen, "size", value, 0.94, turn, not _is_negated(text, start))

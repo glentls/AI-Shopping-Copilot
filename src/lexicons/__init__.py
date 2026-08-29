@@ -270,7 +270,7 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         "cycling": ["cycling", "biking", "bike riding"],
         "work": ["work", "office", "business", "professional", "workwear"],
         "casual": ["casual", "everyday", "daily wear", "weekend"],
-        "formal": ["formal", "black tie", "black-tie", "dressy", "gala"],
+        "formal": ["formal", "black tie", "black-tie", "dressy", "gala", "interview", "job interview"],
         "wedding": ["wedding", "bridesmaid", "bridal"],
         "party": ["party", "night out", "club", "cocktail"],
         "outdoor": ["outdoor", "outdoors", "camping", "adventure"],
@@ -355,6 +355,65 @@ def _surface_pattern(surface: str) -> str:
         if chunk
     ]
     return r"[\s-]+".join(chunks)
+
+
+# Figurative phrases whose words look like product attributes but are not.
+# "feeling blue" is not a colour preference and "watch out" is not jewelry.
+# This is a blocklist of known idioms, not disambiguation -- it cannot
+# generalize, but it removes the false positives that actually occur, and every
+# point of slot weight amplifies the ones left behind.
+IDIOM_PHRASES = (
+    # colour words used figuratively
+    r"black friday", r"in the red\b", r"white noise", r"feeling blue",
+    r"out of the blue", r"green with envy", r"silver lining",
+    r"the gold standard", r"gold medal", r"gr[ae]y area",
+    r"red handed", r"tickled pink", r"navy veteran", r"orange county",
+    r"purple heart", r"brown bag", r"once in a blue moon", r"black sheep",
+    r"white lie", r"green light", r"red flag", r"golden retriever",
+    # material words used figuratively
+    r"cotton candy", r"silk road", r"velvet rope", r"iron out",
+    r"iron fist", r"silver bullet",
+    # garment words used figuratively
+    r"watch out", r"watch the \w+", r"top of the line", r"suits? me",
+    r"suits? you", r"boot up", r"belt out", r"dress rehearsal",
+    r"dressed to the nines", r"ring binder", r"ring me", r"give me a ring",
+    r"cap it off", r"bag of", r"tall order", r"cost an arm and a leg",
+    r"hat trick", r"old hat", r"at the drop of a hat", r"under my belt",
+    r"tighten(?:ing)? (?:my|our|the) belt", r"flats in the city",
+)
+IDIOM_RE = re.compile("|".join(f"(?:{phrase})" for phrase in IDIOM_PHRASES), re.IGNORECASE)
+
+# "for my wife" narrows the catalog to women's items for free, and a gift
+# opener is one of the most common first messages there is.
+RECIPIENT_CUES: dict[str, tuple[str, ...]] = {
+    "women": ("wife", "girlfriend", "mother", "mum", "mom", "sister", "aunt",
+              "grandmother", "grandma", "fiancee"),
+    "men": ("husband", "boyfriend", "father", "dad", "brother", "uncle",
+            "grandfather", "grandpa", "fiance"),
+    "girls": ("daughter", "niece", "granddaughter"),
+    "boys": ("son", "nephew", "grandson"),
+}
+# Anchored on "for/gift for/present for" only: a relative named anywhere else
+# in a sentence is far too weak to narrow a whole catalog on.
+RECIPIENT_RE = {
+    value: re.compile(
+        r"\b(?:for|gift for|present for|buying for)\s+(?:my|a|an|the|his|her)?\s*"
+        r"(?:" + "|".join(re.escape(cue) for cue in cues) + r")\b",
+        re.IGNORECASE,
+    )
+    for value, cues in RECIPIENT_CUES.items()
+}
+
+# Amounts people spell out. Only values that plausibly bound a clothing
+# purchase; nobody writes "three hundred and forty seven dollars".
+WORD_NUMBERS: dict[str, int] = {
+    "a couple of hundred": 200, "a couple hundred": 200, "two hundred": 200,
+    "three hundred": 300, "five hundred": 500, "a thousand": 1000,
+    "one hundred": 100, "a hundred": 100, "hundred": 100,
+    "twenty five": 25, "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+    "ninety": 90,
+}
 
 
 def compile_patterns() -> dict[str, list[tuple[str, re.Pattern[str]]]]:
