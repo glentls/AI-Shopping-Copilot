@@ -133,6 +133,9 @@ class LedgerService:
                 prefs.append(preference)
 
     def mark_attribute_asked(self, session_id: str, attribute: str) -> None:
+        if attribute not in ALLOWED_ATTRIBUTES:
+            warnings.warn(f"Unknown attribute '{attribute}', storing under 'other'.")
+            attribute = "other"
         with self._session_lock(session_id):
             asked = self._store[session_id]["asked_attributes"]
             if attribute not in asked:
