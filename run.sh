@@ -13,7 +13,7 @@ if ! docker info &>/dev/null; then
 fi
 
 # Pull model if not present
-if ! docker model list | grep -q "gemma"; then
+if ! docker model list | grep -q "embeddinggemma"; then
     echo "Pulling ai/embeddinggemma..."
     docker model pull ai/embeddinggemma
 fi
