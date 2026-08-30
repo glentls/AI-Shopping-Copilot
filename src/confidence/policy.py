@@ -95,6 +95,31 @@ def decide(
     )
 
 
+def next_unasked_topic(ledger: SessionLedger, known_attrs: set[str] | None = None) -> str | None:
+    """Pick the next specific attribute (from ``ATTRIBUTE_PRIORITY``, excluding
+    the "other" wildcard) not yet suggested as a message topic this session,
+    and not already disclosed as a constraint.
+
+    This is a message-phrasing helper ONLY -- it never touches the actual
+    ``ask_attribute`` the API contract returns (that stays the "other"
+    wildcard under ``always_ask``, which is what earns the score -- see
+    ``decide_specific_attribute``'s docstring below). The caller is
+    responsible for recording the returned topic via ``ledger.note_ask()``
+    once it's used, so the same topic isn't suggested twice; ``asked_attributes``
+    already always contains "other" from the real ask, which this function
+    ignores by construction (excluded from ``ATTRIBUTE_PRIORITY`` iteration),
+    so the two uses of the same set coexist without interfering.
+    """
+    known_attrs = known_attrs or set()
+    covered = ledger.asked_attributes | known_attrs
+    for attr in ATTRIBUTE_PRIORITY:
+        if attr == "other":
+            continue
+        if attr not in covered:
+            return attr
+    return None
+
+
 def decide_specific_attribute(
     rank: RankResult,
     ledger: SessionLedger,

@@ -50,24 +50,24 @@ class BuildAskMessageTest(unittest.TestCase):
         msg = build_ask_message(_ctx(scenario="intent_override", n_constraints_known=0))
         self.assertEqual(msg, build_ask_message(_ctx(scenario="intent_override", n_constraints_known=5)))
 
-    def test_specific_attribute_gets_its_own_question(self) -> None:
-        color_q = build_ask_message(_ctx(ask_attribute="color"))
-        material_q = build_ask_message(_ctx(ask_attribute="material"))
+    def test_topic_gets_its_own_question(self) -> None:
+        color_q = build_ask_message(_ctx(topic="color"))
+        material_q = build_ask_message(_ctx(topic="material"))
         self.assertNotEqual(color_q, material_q)
         self.assertIn("color", color_q.lower())
 
-    def test_specific_attribute_overrides_situational_default(self) -> None:
-        with_attr = build_ask_message(_ctx(ask_attribute="color", n_constraints_known=2, turn=2))
-        without_attr = build_ask_message(_ctx(ask_attribute=None, n_constraints_known=2, turn=2))
-        self.assertNotEqual(with_attr, without_attr)
+    def test_topic_overrides_situational_default(self) -> None:
+        with_topic = build_ask_message(_ctx(topic="color", n_constraints_known=2, turn=2))
+        without_topic = build_ask_message(_ctx(topic=None, n_constraints_known=2, turn=2))
+        self.assertNotEqual(with_topic, without_topic)
 
-    def test_specific_attribute_still_layers_boundary_lead_in(self) -> None:
-        msg = build_ask_message(_ctx(scenario="boundary", ask_attribute="size"))
+    def test_topic_still_layers_boundary_lead_in(self) -> None:
+        msg = build_ask_message(_ctx(scenario="boundary", topic="size"))
         self.assertIn("judgment", msg.lower())
         self.assertIn("size", msg.lower())
 
-    def test_specific_attribute_still_layers_override_lead_in(self) -> None:
-        msg = build_ask_message(_ctx(scenario="intent_override", ask_attribute="brand"))
+    def test_topic_still_layers_override_lead_in(self) -> None:
+        msg = build_ask_message(_ctx(scenario="intent_override", topic="brand"))
         self.assertIn("updating", msg.lower())
         self.assertIn("brand", msg.lower())
 

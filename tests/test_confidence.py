@@ -6,7 +6,13 @@ import unittest
 from src.confidence.confidence import compute_confidence
 from src.confidence.fallback import safe_decide
 from src.confidence.session_ledger import SessionLedger
-from src.confidence.policy import DEFAULT_THETA, TURN_CUTOFF, decide, decide_specific_attribute
+from src.confidence.policy import (
+    DEFAULT_THETA,
+    TURN_CUTOFF,
+    decide,
+    decide_specific_attribute,
+    next_unasked_topic,
+)
 from src.ledger.ledger import ATTRIBUTE_PRIORITY
 from src.reranker.types import RankResult
 
@@ -229,6 +235,58 @@ class AttributeCyclePolicyTest(unittest.TestCase):
         )
         self.assertEqual(payload.ask_attribute, ATTRIBUTE_PRIORITY[0])
         self.assertEqual(ranker.calls, 1)
+
+
+class NextUnaskedTopicTest(unittest.TestCase):
+    """next_unasked_topic: message-phrasing-only helper, safe to use under
+    always_ask (never touches the real ask_attribute the contract returns)."""
+
+    def test_first_call_returns_first_priority_attribute(self) -> None:
+        ledger = SessionLedger("s", turn=1)
+        self.assertEqual(next_unasked_topic(ledger), ATTRIBUTE_PRIORITY[0])
+
+    def test_never_suggests_the_same_topic_twice(self) -> None:
+        ledger = SessionLedger("s", turn=1)
+        seen: set[str] = set()
+        for _ in range(len(ATTRIBUTE_PRIORITY) - 1):  # -1: "other" is excluded
+            topic = next_unasked_topic(ledger)
+            self.assertIsNotNone(topic)
+            self.assertNotIn(topic, seen)
+            seen.add(topic)
+            ledger.note_ask(topic)
+
+    def test_returns_none_once_every_specific_attribute_suggested(self) -> None:
+        ledger = SessionLedger("s", turn=1)
+        for attr in ATTRIBUTE_PRIORITY:
+            ledger.note_ask(attr)
+        self.assertIsNone(next_unasked_topic(ledger))
+
+    def test_never_suggests_other_as_a_topic(self) -> None:
+        # "other" is always in asked_attributes (from the real always_ask
+        # payload) but must never itself be offered as a phrasing topic.
+        ledger = SessionLedger("s", turn=1)
+        ledger.note_ask("other")
+        self.assertNotEqual(next_unasked_topic(ledger), "other")
+
+    def test_skips_attributes_already_disclosed_as_constraints(self) -> None:
+        ledger = SessionLedger("s", turn=1)
+        known = {ATTRIBUTE_PRIORITY[0]}
+        self.assertNotEqual(next_unasked_topic(ledger, known_attrs=known), ATTRIBUTE_PRIORITY[0])
+
+    def test_example_scenario_no_preference_reply_does_not_repeat_topic(self) -> None:
+        # The exact requested scenario: agent's message asks about "color"
+        # (as a phrasing topic), customer says no preference, that topic
+        # must not be suggested again -- while the real ask_attribute stays
+        # "other" throughout (always_ask never changes).
+        ledger = SessionLedger("s", turn=1)
+        topic = next_unasked_topic(ledger)
+        self.assertEqual(topic, ATTRIBUTE_PRIORITY[0])
+        ledger.note_ask(topic)  # message referenced this topic
+        ledger.note_ask("other")  # the real (unchanged) ask_attribute
+        ledger.observe(f"I don't have a preference for {topic}; please use your judgment.", turn=2)
+        ledger.turn = 2
+        next_topic = next_unasked_topic(ledger)
+        self.assertNotEqual(next_topic, topic)
 
 
 if __name__ == "__main__":
