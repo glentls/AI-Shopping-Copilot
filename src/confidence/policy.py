@@ -136,6 +136,24 @@ def next_unasked_topic(ledger: SessionLedger, known_attrs: set[str] | None = Non
     return next((attr for attr in TOPIC_PRIORITY if attr not in covered), None)
 
 
+def missing_topics(known_attrs: set[str] | None = None) -> list[str]:
+    """Every attribute (from ``TOPIC_PRIORITY``, weighted by measured
+    constraint-type frequency -- see that constant's docstring) not yet
+    disclosed as a constraint, in priority order.
+
+    New, additive alternative to ``next_unasked_topic`` above: a pure
+    function of ``known_attrs`` alone (no ledger/session "already asked"
+    state), so an attribute stays in the result every call until it's
+    actually known -- the follow-up question keeps asking about whatever's
+    still missing, rather than a one-shot "asked once, never again" per
+    attribute. Message-phrasing ONLY, same as ``next_unasked_topic`` -- never
+    touches the real ``ask_attribute`` the contract returns. An empty result
+    means every attribute is covered.
+    """
+    known_attrs = known_attrs or set()
+    return [attr for attr in TOPIC_PRIORITY if attr not in known_attrs]
+
+
 def decide_specific_attribute(
     rank: RankResult,
     ledger: SessionLedger,

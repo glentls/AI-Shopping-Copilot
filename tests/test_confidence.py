@@ -12,6 +12,7 @@ from src.confidence.policy import (
     TURN_CUTOFF,
     decide,
     decide_specific_attribute,
+    missing_topics,
     next_unasked_topic,
 )
 from src.ledger.ledger import ATTRIBUTE_PRIORITY
@@ -312,6 +313,60 @@ class NextUnaskedTopicTest(unittest.TestCase):
         ledger.turn = 2
         next_topic = next_unasked_topic(ledger)
         self.assertNotEqual(next_topic, topic)
+
+
+class MissingTopicsTest(unittest.TestCase):
+    """missing_topics: message-phrasing-only helper, safe to use under
+    always_ask (never touches the real ask_attribute the contract returns).
+    Pure function of known_attrs only -- no ledger/session state -- ordered
+    by TOPIC_PRIORITY (measured constraint-type frequency), not the ledger's
+    ATTRIBUTE_PRIORITY."""
+
+    def test_nothing_known_returns_everything_in_priority_order(self) -> None:
+        self.assertEqual(missing_topics(), list(TOPIC_PRIORITY))
+
+    def test_priority_order_matches_measured_frequency(self) -> None:
+        # category first (natural opener), then feature(404) > material(302)
+        # > color(60) > style(19) > size(11) > use_case(4) > budget > brand
+        # -- the team's measured constraint-type breakdown.
+        self.assertEqual(
+            missing_topics(),
+            ["category", "feature", "material", "color", "style", "size", "use_case", "budget", "brand"],
+        )
+
+    def test_known_attributes_are_excluded(self) -> None:
+        known = {"category", "color"}
+        result = missing_topics(known_attrs=known)
+        self.assertNotIn("category", result)
+        self.assertNotIn("color", result)
+        self.assertEqual(len(result), len(TOPIC_PRIORITY) - 2)
+
+    def test_shrinks_as_more_becomes_known(self) -> None:
+        known: set[str] = set()
+        previous_len = len(missing_topics(known_attrs=known))
+        for attr in TOPIC_PRIORITY:
+            known.add(attr)
+            current_len = len(missing_topics(known_attrs=known))
+            self.assertLess(current_len, previous_len)
+            previous_len = current_len
+
+    def test_empty_once_everything_known(self) -> None:
+        known = set(TOPIC_PRIORITY)
+        self.assertEqual(missing_topics(known_attrs=known), [])
+
+    def test_never_includes_other(self) -> None:
+        self.assertNotIn("other", missing_topics())
+        self.assertNotIn("other", TOPIC_PRIORITY)
+
+    def test_a_missing_attribute_stays_missing_across_calls_until_known(self) -> None:
+        # No per-session "already asked" state: an attribute the customer
+        # hasn't revealed keeps showing up in the bundle every turn (unlike
+        # the old one-shot next_unasked_topic), until it's actually known.
+        known: set[str] = set()
+        first = missing_topics(known_attrs=known)
+        second = missing_topics(known_attrs=known)  # simulates a later turn, nothing new disclosed
+        self.assertEqual(first, second)
+        self.assertIn("color", second)
 
 
 if __name__ == "__main__":

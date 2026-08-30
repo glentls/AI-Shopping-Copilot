@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 
 from src.confidence.payload import ConfidencePayload
-from src.output.followup import FollowUpContext, build_ask_message, build_recommend_message
+from src.output.followup import (
+    FollowUpContext,
+    build_all_missing_ask_message,
+    build_ask_message,
+    build_recommend_message,
+)
 from src.output.formatter import OutputFormatter
 
 
@@ -132,9 +137,12 @@ class OutputFormatterTest(unittest.TestCase):
         self.assertEqual(result["ask_attribute"], "other")
 
     def test_clarify_payload_with_context_uses_situational_message(self) -> None:
+        # OutputFormatter calls build_all_missing_ask_message (the bundled
+        # missing-attributes builder), not build_ask_message (the older,
+        # still-available single-topic builder) -- see formatter.py.
         payload = ConfidencePayload(score=0.1, clarify=True, ask_attribute="other", reason="r")
         result = self.formatter.format(payload, ["B001"], context=_ctx(scenario="boundary"))
-        self.assertEqual(result["message"], build_ask_message(_ctx(scenario="boundary")))
+        self.assertEqual(result["message"], build_all_missing_ask_message(_ctx(scenario="boundary")))
         self.assertNotEqual(result["message"], "Anything else that would help me narrow this down?")
 
     def test_no_clarify_without_context_uses_legacy_static_message(self) -> None:

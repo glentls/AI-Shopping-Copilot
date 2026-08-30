@@ -10,6 +10,7 @@ Public API:
     always_ask(ledger)                                -> ConfidencePayload  # P0 arm (shipped default)
     decide_specific_attribute(rank, ledger, known_attrs) -> ConfidencePayload  # measured alternative
     next_unasked_topic(ledger, known_attrs)           -> str | None  # message-phrasing helper, always_ask-safe
+    missing_topics(known_attrs)                       -> list[str]  # message-phrasing helper, always_ask-safe
     safe_decide(rank_fn, ledger, fallback, theta, policy, known_attrs) -> (payload, recs)  # no-raise
     SessionLedger                                     # per-session state
     ConfidencePayload                                 # per-turn result
@@ -24,6 +25,7 @@ from src.confidence.policy import (
     always_ask,
     decide,
     decide_specific_attribute,
+    missing_topics,
     next_unasked_topic,
 )
 
@@ -32,6 +34,7 @@ __all__ = [
     "decide",
     "decide_specific_attribute",
     "next_unasked_topic",
+    "missing_topics",
     "always_ask",
     "safe_decide",
     "popularity_top10",

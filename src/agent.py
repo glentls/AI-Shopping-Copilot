@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.confidence import SessionLedger, popularity_top10, safe_decide
-from src.confidence.policy import DEFAULT_THETA, exposure, next_unasked_topic
+from src.confidence.policy import DEFAULT_THETA, exposure, missing_topics
 from src.intent_router import build_search_key, detect_scenario, extract_attributes
 from src.intent_router.constraint_memory import ConstraintMemory
 from src.ledger.ledger import LedgerService
@@ -219,14 +219,13 @@ class Agent:
         if payload.ask_attribute:
             conf_ledger.note_ask(payload.ask_attribute)
 
-        # Message-phrasing topic: which specific, not-yet-suggested attribute
-        # to phrase the question around. Independent of payload.ask_attribute
-        # (the contract field, which stays "other" under always_ask -- see
-        # next_unasked_topic's docstring). Recorded via note_ask() too, so
-        # the same topic is never suggested twice in this session.
-        topic = next_unasked_topic(conf_ledger, known_attrs=known_attrs) if payload.clarify else None
-        if topic:
-            conf_ledger.note_ask(topic)
+        # Message-phrasing: every attribute not yet disclosed, bundled into
+        # one question (see missing_topics's docstring). Independent of
+        # payload.ask_attribute (the contract field, which stays "other"
+        # under always_ask). Recomputed fresh from known_attrs each turn --
+        # no per-session state, so a missing attribute keeps being asked
+        # about until it's actually known.
+        missing = missing_topics(known_attrs) if payload.clarify else []
 
         # -- 7. Exposure gate + format ----------------------------------------
         # Reveal one candidate on turns 1-2, the full list from turn 3 (or once
@@ -242,7 +241,7 @@ class Agent:
             exhausted=conf_ledger.exhausted,
             turn=turn,
             override_seen=conf_ledger.override_seen,
-            topic=topic,
+            missing_attrs=tuple(missing),
         )
         return self._formatter.format(payload, recommendations[:reveal], context=followup_context)
 

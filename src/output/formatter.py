@@ -15,7 +15,12 @@ evaluator's score.
 from __future__ import annotations
 
 from src.confidence.payload import ConfidencePayload
-from src.output.followup import FollowUpContext, build_ask_message, build_recommend_message
+from src.output.followup import (
+    FollowUpContext,
+    build_all_missing_ask_message,
+    build_ask_message,
+    build_recommend_message,
+)
 
 # Legacy fallback: static phrasing per allowed ask_attribute (contract enum),
 # used only when no FollowUpContext is supplied (keeps existing callers
@@ -65,7 +70,7 @@ class OutputFormatter:
 
         if payload.clarify and payload.ask_attribute:
             if context is not None:
-                message = build_ask_message(context)
+                message = build_all_missing_ask_message(context)
             else:
                 message = _QUESTION_BY_ATTRIBUTE.get(
                     payload.ask_attribute, _DEFAULT_ASK_MESSAGE
