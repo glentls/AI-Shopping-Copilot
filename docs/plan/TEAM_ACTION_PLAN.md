@@ -67,17 +67,58 @@ item 1 before item 2.
 
 ### R1 — Retrieval · `src/retrieval/`
 
-- [ ] Embed all 50k products (`title + categories + store + top features` — no `brand` field
-      exists, use `store`). Cache the vectors to disk.
-- [ ] Add a dense-search function returning the same `list[Candidate]` shape BM25 already returns.
-      Plain numpy cosine similarity is enough at 50k rows — skip FAISS, it's not needed at this scale.
-- [ ] Fuse BM25 + dense with Reciprocal Rank Fusion (one formula; the `k` constant goes in
-      `config.yaml`, not the code).
-- [ ] Add category filtering as a **hard** filter (the one field that's always populated); treat
-      price and store as **soft** boosts only.
-- [ ] Add relaxation: if a hard filter empties the pool, drop it and retry.
-- [ ] Report Recall@100 (is the gold item even in your top 100?) and re-check it after every
-      retrieval change — it's the ceiling everything downstream is capped by.
+**Status: complete (all 7 build phases). Committed pipeline TechScore 0.1278 → 0.1693 (+32%),
+Recall@100 0.573 → 0.773, dev-150. Full phase-by-phase log, ablation table and negatives in
+`docs/r1_log.md`. 76/76 `make test`; `make eval` = 0.169271.**
+
+- [x] Embed all 50k products (`title + categories[2:5] + store + top features + key details`).
+      bge-small-en-v1.5, 384-dim, SHA-keyed `.npy` cache (`.cache/`, gitignored). BLAIR tested and
+      rejected (−12pt R@100, 5× slower).
+- [x] Dense-search function (`dense_search` / `dense_search_batch`), same `list[Candidate]` shape,
+      plain numpy cosine, no FAISS. **Dense alone loses to BM25 (R@100 0.43 vs 0.64)** — near-
+      duplicate catalog buries the gold; it only earns its place in fusion.
+- [x] Fusion (`fusion.py`). **RRF was a wash (TechScore +0.0003)** — flat `1/(k+rank)` demotes
+      BM25's rank-1/2 golds. **z-score fusion (magnitude-aware), bm25:3/dense:1, is the one that
+      works: +0.026 alone.** `enabled: false` — costs the `torch` dependency + a 77 MB cache that
+      must ship or rebuild (~30 min).
+- [x] Category **hard** filter + relaxation ladder (`postprocess.py`). Works, tested — but +1-2pt
+      at the *oracle* ceiling, ~0 once the popularity prior is in (`categories` is already BM25-
+      weighted 4.0). Inert live (needs R3's `hard_filters`); ships as the hook. Price/store are
+      soft boosts only (`soft_prefs`, inert R5 hook).
+- [x] Relaxation: pool below `min_pool_size` → drop lowest-priority filter, retry, report in
+      `RetrievalResult.dropped_constraints`.
+- [x] **Popularity prior (`postprocess.py`) — the big lever, `enabled: true` w=0.2: TechScore
+      0.1278 → 0.1693.** 148/150 dev targets are above catalog-median rating count (median at the
+      99.5th percentile); the evaluator picks popular products as targets and the spec says the
+      private set is built the same way.
+- [x] Multi-turn (`multiturn.py`) — query accumulation, `enabled: true` but **inert until R4
+      wires** `RetrievalRequest.{session_id,turn,...}` (the ~8 lines in `r1_contract_change.md`).
+      Profile-blend measured and rejected (net-negative on the full pipeline). Rocchio shipped but
+      unmeasurable (no accept/reject signal in this eval).
+- [x] `eval/recall_probe.py` — standalone Recall@{10,50,100,500} harness (+`--dense`,
+      `--multiturn`), re-run after every change. Oracle line stays 1.000 (index is healthy).
+
+**Remaining R1 headroom (deferred, not blocking integration — detail in `docs/r1_log.md`):**
+
+1. **Popularity weight is conservative (0.2).** The dev-150 curve keeps climbing to TechScore
+   0.28 at w=0.5; fusion + w=0.3 hits 0.2977. Left low on purpose — measured with NullReranker,
+   untested on holdout, and a high weight makes the agent ignore the conversation. **R4 should
+   sweep `retrieval.popularity.weight` on the holdout with the real reranker in place.**
+2. **Fusion is off.** One config line (`retrieval.fusion.enabled: true`) once the team accepts
+   the `torch` dependency and ships/builds the embedding cache. +0.026 alone, +0.17 stacked with
+   a higher popularity weight.
+3. **Query→document vocabulary mismatch** — Phase 1 named this the core problem (oracle R@100 =
+   1.0, real turn-1 R@100 = 0.57). Stopwords helped; no synonym expansion or learned query
+   rewriting was tried. Likely the largest untapped lever.
+4. **Popularity transform variants** — only `log1p(rating_number)` min-max blend was tried; not
+   `average_rating` weighting, percentile-rank, or `rating × log(count)`.
+5. **Fusion weights swept coarsely** (bm25 1/2/3, k 20/40/60/100); no fractional or per-scenario.
+6. **Dense doc-template A/B used an 8k-distractor subsample** (Phase 3); worth re-confirming on
+   the full 50k if fusion is turned on.
+7. **Boundary scenario** (n=8, R@100 0.625) is essentially unaddressed.
+
+Items 1-2 need the real R2/R3 and a team decision; 3-7 are offline-testable R1 work if there is
+time after integration.
 
 ### R2 — Ranking · `src/ranking/`
 
