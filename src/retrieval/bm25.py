@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.config import load_config
-from src.contracts import Candidate, ProductMeta, RetrievalRequest
+from src.contracts import Candidate, ProductMeta, RetrievalRequest, RetrievalResult
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 STOPWORDS = {
@@ -126,13 +126,13 @@ def build_index(catalog_path: str | Path, config: dict | None = None) -> BM25Ind
     return BM25Index(connection=connection, products=products, fallback_pool=fallback_pool)
 
 
-def search(index: BM25Index, request: RetrievalRequest, config: dict | None = None) -> list[Candidate]:
+def search(index: BM25Index, request: RetrievalRequest, config: dict | None = None) -> RetrievalResult:
     config = config or load_config()
     retrieval_cfg = config["retrieval"]
     unique_terms = list(dict.fromkeys(_terms(request.canonical_query)))[: retrieval_cfg["max_query_terms"]]
     expression = " OR ".join(f'"{term}"' for term in unique_terms)
     if not expression:
-        return []
+        return RetrievalResult([], pool_size=0, dropped_constraints=[])
 
     weights = retrieval_cfg["bm25_weights"]
     weight_args = [weights[column] for column in _WEIGHT_COLUMN_ORDER]
@@ -151,4 +151,6 @@ def search(index: BM25Index, request: RetrievalRequest, config: dict | None = No
         if meta is None:
             continue
         candidates.append(Candidate(parent_asin=parent_asin, score=-float(rank_val), route="bm25", meta=meta))
-    return candidates
+    # BM25 applies no hard category filter and runs no relaxation ladder, so the surviving
+    # pool is just what FTS5 returned and nothing was dropped. Phases 6+ populate these for real.
+    return RetrievalResult(candidates, pool_size=len(candidates), dropped_constraints=[])

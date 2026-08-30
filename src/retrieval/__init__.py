@@ -5,6 +5,8 @@ from starter/agent.py) -- per the Phase-2 instructions, retrieval's permanent fa
 existing baseline, not an empty result set, since an empty candidate list can never score.
 """
 
+from src.contracts import RetrievalResult
+
 from .bm25 import BM25Index, build_index, search
 
-__all__ = ["BM25Index", "build_index", "search"]
+__all__ = ["BM25Index", "build_index", "search", "RetrievalResult"]
