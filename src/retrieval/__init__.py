@@ -25,6 +25,19 @@ _GENERIC_ONLY_RE = re.compile(
     r"i(?:'m| am) still exploring|nothing else|no idea)[.! ]*$",
     re.IGNORECASE,
 )
+
+_NO_REQUIREMENT_RE = re.compile(
+    r"\b(?:"
+    r"(?:i\s+)?(?:have\s+)?no\s+(?:specific\s+|particular\s+|strong\s+)?"
+    r"(?:(?:brand|color|colour|material|size|style|feature|category)\s+)?"
+    r"(?:requirement|preference)"
+    r"|(?:without|skip)\s+(?:a\s+)?(?:brand|color|colour|material|size|style)\s+"
+    r"(?:requirement|preference)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 class Retriever:
     def __init__(
         self,
@@ -40,7 +53,13 @@ class Retriever:
             # Useful for unit tests and tiny custom catalogs. A real 50k
             # deployment should always run tools.build_index ahead of time.
             build_bm25_index(self.catalog_path, self.artifacts_dir)
-        self.bm25 = BM25Index(bm25_path)
+        try:
+            self.bm25 = BM25Index(bm25_path)
+        except ValueError:
+            # Schema upgrades (for example adding the Porter table) should not
+            # leave a previously built checkout unable to start.
+            build_bm25_index(self.catalog_path, self.artifacts_dir)
+            self.bm25 = BM25Index(bm25_path)
         self.metadata, self.fallback = self.bm25.metadata()
         self._profile_cache: dict[tuple[str, ...], dict[str, int]] = {}
         self.mode = os.environ.get("TJ_RETRIEVAL_MODE", "fused").strip().lower()
@@ -57,12 +76,27 @@ class Retriever:
         )
 
     @staticmethod
+    def _clean_message(text: str) -> str:
+        """Remove no-constraint clauses without discarding useful siblings."""
+        source = " ".join((text or "").strip().split())
+        if not source:
+            return ""
+        clauses = re.split(r"(?<=[,;.!?])\s*", source)
+        kept = [
+            clause.strip()
+            for clause in clauses
+            if clause.strip()
+            and not NO_PREFERENCE_RE.search(clause)
+            and not _NO_REQUIREMENT_RE.search(clause)
+        ]
+        return " ".join(kept)
+
+    @staticmethod
     def _informative(text: str) -> bool:
         """Reject replies that communicate no product preference."""
-        cleaned = " ".join((text or "").strip().split())
+        cleaned = Retriever._clean_message(text)
         return (
             bool(cleaned)
-            and not NO_PREFERENCE_RE.search(cleaned)
             and not _GENERIC_ONLY_RE.match(cleaned)
         )
 
@@ -85,10 +119,13 @@ class Retriever:
         clause also handles catalog phrases the deterministic extractor does
         not understand.
         """
-        messages = [
-            text for role, text in state.history
-            if role == "customer" and Retriever._informative(text)
-        ]
+        messages = []
+        for role, text in state.history:
+            if role != "customer":
+                continue
+            cleaned = Retriever._clean_message(text)
+            if Retriever._informative(cleaned):
+                messages.append(cleaned)
         if messages and any(
             replaces_earlier_preference(text) for text in messages[1:]
         ):
@@ -159,6 +196,11 @@ class Retriever:
             if self.mode in {"bm25", "fused"}
             else []
         )
+        stemmed_hits = (
+            self.bm25.stemmed_search(lexical_query, route_limit)
+            if self.mode in {"bm25", "fused"}
+            else []
+        )
         dense_hits = dense_future.result() if dense_future is not None else []
         exact_hits = (
             self.bm25.exact_search(exact_phrases, route_limit)
@@ -174,6 +216,7 @@ class Retriever:
         profile_ranks = self._profile_cache[tag_key]
         return reciprocal_rank_fusion(
             bm25_hits,
+            stemmed_hits,
             dense_hits,
             exact_hits,
             profile_ranks,
@@ -187,6 +230,9 @@ class Retriever:
             dense_weight=(
                 0.0 if exact_phrases else (0.10 if generic_browsing else 1.0)
             ),
+            # Verbatim requirement clauses already provide strong exact
+            # lexical evidence, so morphology is a smaller hedge there.
+            exact_phrase_mode=bool(exact_phrases),
         )
 
     def rerank(self, cands: list[Candidate], state: ConversationState) -> list[Candidate]:
