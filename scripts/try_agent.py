@@ -53,7 +53,6 @@ def _new_session(agent: Agent) -> tuple[str, int]:
 
 
 def _print_turn(response: dict, titles: dict[str, str]) -> None:
-    print(f"Agent: {response['message']}")
     for rec in response["recommendations"]:
         asin = rec["parent_asin"]
         title = titles.get(asin, "(title unavailable)")
@@ -62,6 +61,7 @@ def _print_turn(response: dict, titles: dict[str, str]) -> None:
         print(f"  • {title}  [{asin}]")
     if not response["recommendations"]:
         print("  (no recommendations this turn)")
+    print(f"Agent: {response['message']}")
     print()
 
 
