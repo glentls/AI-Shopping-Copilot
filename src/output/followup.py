@@ -70,7 +70,7 @@ _ATTRIBUTE_QUESTIONS = {
     "style": "What style are you going for?",
     "brand": "Any brand you prefer?",
     "budget": "What's your budget?",
-    "feature": "Are there any specific features that matter most to you?",
+    "feature": "Any specific features in mind?",
     "use_case": "What will you mainly use it for?",
 }
 
