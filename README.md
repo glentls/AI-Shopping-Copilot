@@ -13,9 +13,9 @@ the full fused index:
 
 | Metric | Result |
 |---|---:|
-| TechnicalScore | **0.8541** |
+| TechnicalScore | **0.8553** |
 | Hit Rate@10 | **0.9850** |
-| MRR | **0.6506** |
+| MRR | **0.6547** |
 | MTTC | **2.68** |
 | Reported tokens | **0** |
 
@@ -131,12 +131,12 @@ class Agent:
 [`docs/agent_api_contract.json`](docs/agent_api_contract.json) for the complete
 contract.
 
-## Model, cost, and latency
+## Cost and latency
 
-The scoring path makes no LLM or external API calls. It reports zero prompt and
-completion tokens and has an estimated per-session API cost of $0. Dense query
-encoding runs locally with the pinned MiniLM ONNX model; after artifacts are
-built, evaluation requires no network access.
+The scoring path uses deterministic parsing and makes no external API calls.
+It reports zero prompt and completion tokens and has an estimated per-session
+API cost of $0. Dense query encoding runs locally with the pinned MiniLM ONNX
+model; after artifacts are built, evaluation requires no network access.
 
 On the documented Apple ARM development machine, full agent initialization was
 0.66 seconds. Warm full-catalog search plus reranking measured about 27.5 ms

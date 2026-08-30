@@ -212,9 +212,4 @@ leather, leather"), repeating one sentence for seven turns as the frozen state
 produces nothing new, and promising to drop a topic while asking it again in the
 same breath.
 
-An optional local-LLM rewrite sits behind `TJ_LLM_MESSAGE`, wrapped in
-try/except with the template as fallback. It is off by default and nothing else
-in the pipeline may call a model: the evaluator scores a raised exception as a
-MISS, and 800 sessions × 10 turns of model calls will blow any latency budget.
-
 See `docs/lane_c_demo_transcript.md` for two annotated sessions.

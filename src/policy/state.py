@@ -81,7 +81,8 @@ def _apply_override(
     state.shown_recommendations.clear()
 
     targets: dict[str, set[str] | None] = {}
-    if replaces_earlier_preference(user_message):
+    broad_override = replaces_earlier_preference(user_message)
+    if broad_override:
         # The evaluator (and normal shopping language) introduces the stable
         # category first, then the replaceable preference after a full stop:
         # "I'm looking for watches. Stainless Steel Band". Re-extract only
@@ -104,10 +105,11 @@ def _apply_override(
                 continue
             targets[slot] = {value.value for value in values if value.polarity}
 
-    # A narrower correction ("actually, leather instead") still replaces the
-    # prior values in the slot it names. This is also the safe fallback when a
-    # broad cue contains no preference we can extract from the opener.
-    if not targets:
+    # A narrower correction ("actually, leather instead") replaces the prior
+    # values in the slot it names. A broad override with an unrecognized opener
+    # is deliberately left alone: guessing from the new slot used to erase
+    # valid constraints learned on later turns and lowered MRR.
+    if not targets and not broad_override:
         named_targets = set(incoming) if retracted == ["*"] else set(retracted)
         targets.update((slot, None) for slot in named_targets)
 

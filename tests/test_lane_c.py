@@ -114,6 +114,29 @@ class TestOverride(unittest.TestCase):
         self.assertIn("cotton", state.excluded("material"))
         self.assertCountEqual(state.active("feature"), ["comfortable", "waterproof"])
 
+    def test_unmapped_broad_override_preserves_later_material_details(self):
+        """Regression for public_0046: do not guess the old slot from wool."""
+        state = make_state()
+        say(state, "I'm looking for socks. No Closure closure", 1, asked="other")
+        say(
+            state,
+            "For that, what matters is: wool; 44% Acrylic, 28% Cotton, "
+            "20% Merino Wool, 8% Polyester.",
+            2,
+            asked="other",
+        )
+
+        say(
+            state,
+            "Actually, ignore my earlier preference. What I need is: wool.",
+            3,
+        )
+
+        self.assertCountEqual(
+            state.active("material"),
+            ["wool", "acrylic", "cotton", "polyester"],
+        )
+
     def test_retracted_value_can_be_revived(self):
         state = make_state()
         say(state, "cotton please", 1, asked="other")

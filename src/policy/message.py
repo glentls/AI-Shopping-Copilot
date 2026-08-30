@@ -17,7 +17,6 @@ Three things a template can get wrong that this one does not:
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 from src.contracts import Candidate, ConversationState
@@ -67,12 +66,6 @@ LEAD_LINES = (
     "These ten are my closest matches.",
     "Here is the current top ten.",
 )
-
-# Opt-in only. The evaluator counts an exception as a MISS and this runs on
-# every turn of every session, so the hook is wrapped and the template is
-# always the fallback. Nothing else in the pipeline may call a model.
-LLM_HOOK = os.environ.get("TJ_LLM_MESSAGE")
-
 
 def _join(items: list[str], conjunction: str = "or") -> str:
     # An empty join is a real case: an override can re-state a value we already
@@ -238,13 +231,4 @@ def compose_message(
     ask_attribute: Optional[str],
     extra_topics: list[str],
 ) -> str:
-    text = _template(state, cands, ask_attribute, extra_topics)
-    if not LLM_HOOK:
-        return text
-    try:
-        from src.policy.llm import rewrite  # optional, not in the default install
-
-        return rewrite(state, text, ask_attribute) or text
-    except Exception:
-        # A model failure must never cost a session. Fall back silently.
-        return text
+    return _template(state, cands, ask_attribute, extra_topics)
