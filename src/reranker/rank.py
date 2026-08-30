@@ -38,17 +38,42 @@ def default_query(constraints: list[str], extra: str = "") -> str:
     return " ".join([*constraints, extra]).strip()
 
 
-def _hydrate_products(catalog: Catalog, parent_asins: list[str]) -> dict[str, Product]:
+def _hydrate_products(
+    catalog: Catalog,
+    parent_asins: list[str],
+    cache: dict[str, Product] | None = None,
+) -> dict[str, Product]:
     """Batch-fetch catalog rows for ``parent_asins`` and build reranker ``Product``
-    shims keyed by parent_asin."""
+    shims keyed by parent_asin.
+
+    ``cache`` (if given) is a persistent, content-addressed store of
+    previously hydrated products (keyed by ``parent_asin``, never mutated by
+    the catalog during a run) -- only the ids missing from it are fetched,
+    and the cache is updated in place with any newly fetched rows."""
     if not parent_asins:
         return {}
-    placeholders = ", ".join("?" for _ in parent_asins)
-    sql = (
-        f"SELECT {', '.join(_ROW_COLUMNS)} FROM products "
-        f"WHERE parent_asin IN ({placeholders})"
-    )
-    rows = catalog.execute(sql, parent_asins)
+    if cache is None:
+        missing = parent_asins
+    else:
+        missing = [pid for pid in parent_asins if pid not in cache]
+    if missing:
+        placeholders = ", ".join("?" for _ in missing)
+        sql = (
+            f"SELECT {', '.join(_ROW_COLUMNS)} FROM products "
+            f"WHERE parent_asin IN ({placeholders})"
+        )
+        rows = catalog.execute(sql, missing)
+        fetched = _rows_to_products(rows)
+        if cache is not None:
+            cache.update(fetched)
+    else:
+        fetched = {}
+    if cache is None:
+        return fetched
+    return {pid: cache[pid] for pid in parent_asins if pid in cache}
+
+
+def _rows_to_products(rows: list[tuple]) -> dict[str, Product]:
     products: dict[str, Product] = {}
     for row in rows:
         (
@@ -82,6 +107,11 @@ class Reranker:
     def __init__(self, catalog: Catalog, retriever: Retriever) -> None:
         self.catalog = catalog
         self.retriever = retriever
+        # Process-lifetime, content-addressed caches: the catalog is
+        # read-only for the duration of a run, so a cache hit is always
+        # exactly the value the uncached path would have computed.
+        self._bm25_cache: dict[tuple[str, int], list[str]] = {}
+        self._product_cache: dict[str, Product] = {}
 
     def rank(
         self,
@@ -91,12 +121,16 @@ class Reranker:
         pool_size: int = DEFAULT_POOL,
     ) -> RankResult:
         constraints = constraints or []
-        candidate_ids = self.retriever.retrieve_bm25({"keywords": [query]}, top_k=pool_size)
+        cache_key = (query, pool_size)
+        candidate_ids = self._bm25_cache.get(cache_key)
+        if candidate_ids is None:
+            candidate_ids = self.retriever.retrieve_bm25({"keywords": [query]}, top_k=pool_size)
+            self._bm25_cache[cache_key] = candidate_ids
 
         if not candidate_ids:
             return RankResult()
 
-        products = _hydrate_products(self.catalog, candidate_ids)
+        products = _hydrate_products(self.catalog, candidate_ids, cache=self._product_cache)
 
         # Compile each constraint once, then reuse across all candidates.
         matchers = compile_constraints(constraints)

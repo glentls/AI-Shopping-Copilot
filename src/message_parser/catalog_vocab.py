@@ -3,10 +3,11 @@ attribute matching than static word lists alone."""
 
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 from pathlib import Path
+
+from src.catalog.loader import load_catalog_rows
 
 from .vocab import EXCLUDED_CATEGORY_TERMS
 
@@ -66,24 +67,20 @@ def load_catalog_vocab(
     store_counts: Counter[str] = Counter()
     word_doc_freq: Counter[str] = Counter()
 
-    with Path(catalog_path).open(encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            product = json.loads(line)
-            for cat in product.get("categories") or []:
-                for part in str(cat).split(","):
-                    cleaned = _normalize(part)
-                    if cleaned and cleaned not in EXCLUDED_CATEGORY_TERMS:
-                        categories.add(cleaned)
+    for product in load_catalog_rows(str(catalog_path)):
+        for cat in product.get("categories") or []:
+            for part in str(cat).split(","):
+                cleaned = _normalize(part)
+                if cleaned and cleaned not in EXCLUDED_CATEGORY_TERMS:
+                    categories.add(cleaned)
 
-            store = product.get("store")
-            if store:
-                normalized_store = _normalize(str(store))
-                if normalized_store:
-                    store_counts[normalized_store] += 1
+        store = product.get("store")
+        if store:
+            normalized_store = _normalize(str(store))
+            if normalized_store:
+                store_counts[normalized_store] += 1
 
-            word_doc_freq.update(_searchable_words(product))
+        word_doc_freq.update(_searchable_words(product))
 
     brands: set[str] = set()
     for name, count in store_counts.items():

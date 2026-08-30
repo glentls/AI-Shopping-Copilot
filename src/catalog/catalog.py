@@ -15,9 +15,10 @@ Table schema (``products``):
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
+
+from src.catalog.loader import load_catalog_rows
 
 
 # The BM25 text columns, in declared / insert order.
@@ -66,26 +67,24 @@ class Catalog:
         )
         insert = f"INSERT INTO {TABLE_NAME} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         batch: list[tuple] = []
-        with self.catalog_path.open(encoding="utf-8") as handle:
-            for line in handle:
-                product = json.loads(line)
-                batch.append(
-                    (
-                        str(product["parent_asin"]),
-                        _text(product.get("title")),
-                        _text(product.get("categories")),
-                        _text(product.get("features")),
-                        _text(product.get("details")),
-                        _text(product.get("store")),
-                        _text(product.get("description")),
-                        product.get("price"),
-                        product.get("average_rating"),
-                        product.get("rating_number"),
-                    )
+        for product in load_catalog_rows(str(self.catalog_path)):
+            batch.append(
+                (
+                    str(product["parent_asin"]),
+                    _text(product.get("title")),
+                    _text(product.get("categories")),
+                    _text(product.get("features")),
+                    _text(product.get("details")),
+                    _text(product.get("store")),
+                    _text(product.get("description")),
+                    product.get("price"),
+                    product.get("average_rating"),
+                    product.get("rating_number"),
                 )
-                if len(batch) >= 1000:
-                    cursor.executemany(insert, batch)
-                    batch.clear()
+            )
+            if len(batch) >= 1000:
+                cursor.executemany(insert, batch)
+                batch.clear()
         if batch:
             cursor.executemany(insert, batch)
         self.connection.commit()

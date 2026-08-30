@@ -162,21 +162,42 @@ class Retriever:
     # ------------------------------------------------------------------
     def _build_match_expression(self, search_key: dict[str, list]) -> str:
         """Build the FTS5 MATCH expression from the text fields, expanding
-        each field's terms into its mapped columns via column-filter syntax."""
-        clauses: list[str] = []
+        each field's terms into its mapped columns via column-filter syntax.
+
+        Each *distinct term* contributes exactly one clause, whose column
+        set is the union of every field's mapped columns under which that
+        term appears. This matters because SQLite FTS5's ``bm25()`` sums a
+        contribution per matching phrase-clause, not per distinct term: if
+        the same term were emitted as two separate OR'd clauses (e.g. once
+        under a structured field like ``color`` and again under a
+        ``keywords`` catch-all), a row matching both would have that term's
+        contribution double-counted -- an artificial score boost unrelated
+        to actual relevance. Deduping by term keeps each term's bm25
+        contribution counted exactly once regardless of how many fields it
+        was disclosed under."""
+        term_columns: dict[str, set[str]] = {}
+        term_order: list[str] = []
         for field, value in search_key.items():
             if field in _NUMERIC_FIELD_TO_COLUMN or _is_numeric_filter(value):
                 continue
             if not isinstance(value, list):
                 continue
             columns = self.field_map.get(field, _TEXT_COLUMNS)
-            column_filter = "{" + " ".join(columns) + "}"
             for raw in value:
                 for term in dict.fromkeys(_terms(str(raw))):
-                    clauses.append(f'{column_filter}: "{term}"')
-        # OR-combine every term/column clause, mirroring the baseline's loose
+                    if term not in term_columns:
+                        term_columns[term] = set()
+                        term_order.append(term)
+                    term_columns[term].update(columns)
+
+        clauses: list[str] = []
+        for term in term_order:
+            ordered_columns = [c for c in _TEXT_COLUMNS if c in term_columns[term]]
+            column_filter = "{" + " ".join(ordered_columns) + "}"
+            clauses.append(f'{column_filter}: "{term}"')
+        # OR-combine every term's clause, mirroring the baseline's loose
         # recall-oriented matching.
-        return " OR ".join(dict.fromkeys(clauses))
+        return " OR ".join(clauses)
 
     def _build_numeric_filter(self, search_key: dict[str, list]) -> tuple[str, list]:
         """Build the SQL WHERE fragment (leading ``AND``) and bound params for

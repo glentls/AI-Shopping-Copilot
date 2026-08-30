@@ -1,0 +1,8 @@
+{
+  "sample_count": 200,
+  "startup_s": 2.1375,
+  "total_eval_s": 28.3898,
+  "total_turns": 794,
+  "avg_turn_ms": 33.0468,
+  "max_turn_ms": 119.0941
+}

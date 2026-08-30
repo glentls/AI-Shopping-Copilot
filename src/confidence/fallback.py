@@ -7,9 +7,9 @@ from the catalog (rating_number desc, then average_rating desc).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+from src.catalog.loader import load_catalog_rows
 from src.confidence.session_ledger import SessionLedger
 from src.confidence.payload import ConfidencePayload
 from src.confidence.policy import FIXED_ASK_ATTRIBUTE
@@ -18,14 +18,10 @@ from src.confidence.policy import FIXED_ASK_ATTRIBUTE
 def popularity_top10(catalog_path: str | Path) -> list[str]:
     """Compute the popularity fallback list (top 10 parent_asin)."""
     rows: list[tuple[float, float, str]] = []
-    with Path(catalog_path).open(encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            p = json.loads(line)
-            rating_number = float(p.get("rating_number") or 0)
-            average_rating = float(p.get("average_rating") or 0)
-            rows.append((rating_number, average_rating, str(p["parent_asin"])))
+    for p in load_catalog_rows(str(catalog_path)):
+        rating_number = float(p.get("rating_number") or 0)
+        average_rating = float(p.get("average_rating") or 0)
+        rows.append((rating_number, average_rating, str(p["parent_asin"])))
     rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
     return [asin for _, _, asin in rows[:10]]
 
