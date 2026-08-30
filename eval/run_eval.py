@@ -18,7 +18,7 @@ from pathlib import Path
 
 from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl
 from src.config import load_config
-from starter.agent import Agent
+from src.agent import Agent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

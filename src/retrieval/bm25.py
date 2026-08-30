@@ -72,6 +72,42 @@ def _product_meta(product: dict) -> ProductMeta:
     )
 
 
+def _soft_preference_score(meta: ProductMeta, soft_prefs: dict, config: dict) -> float:
+    """Score soft preferences without filtering candidates out of the pool."""
+    if not isinstance(soft_prefs, dict):
+        return 0.0
+    retrieval_cfg = config.get("retrieval", {})
+    match_weight = float(retrieval_cfg.get("soft_pref_match_weight", 0.12))
+    negative_weight = float(retrieval_cfg.get("soft_pref_negative_weight", 0.18))
+    fields = {
+        "title": meta.title,
+        "categories": " ".join(meta.categories),
+        "features": " ".join(meta.features),
+        "description": " ".join(meta.description),
+        "store": meta.store or "",
+        "brand": meta.details_brand or "",
+        "details_brand": meta.details_brand or "",
+        "budget": "" if meta.price is None else str(meta.price),
+    }
+    searchable = " ".join(fields.values()).lower()
+    score = 0.0
+    for field, values in soft_prefs.items():
+        if field in {"negative_terms", "rejected_asins"} or not isinstance(values, dict):
+            continue
+        field_name = str(field).lower()
+        corpus = fields.get(field_name, searchable).lower()
+        for value, weight in values.items():
+            if str(value).lower() in corpus:
+                score += match_weight * float(weight)
+    negative_terms = soft_prefs.get("negative_terms", {})
+    if isinstance(negative_terms, dict):
+        corpus = " ".join(fields.values()).lower()
+        for value, weight in negative_terms.items():
+            if str(value).lower() in corpus:
+                score += negative_weight * float(weight)
+    return score
+
+
 @dataclass
 class BM25Index:
     connection: sqlite3.Connection
@@ -145,12 +181,29 @@ def search(index: BM25Index, request: RetrievalRequest, config: dict | None = No
     ).fetchall()
 
     candidates: list[Candidate] = []
+    soft_pref_changed_order = False
+    rejected = {str(item) for item in request.soft_prefs.get("rejected_asins", [])} if isinstance(request.soft_prefs, dict) else set()
+    rejected_penalty = float(retrieval_cfg.get("rejected_asin_penalty", 1000000.0))
     for parent_asin, rank_val in rows:
         parent_asin = str(parent_asin)
         meta = index.products.get(parent_asin)
         if meta is None:
             continue
-        candidates.append(Candidate(parent_asin=parent_asin, score=-float(rank_val), route="bm25", meta=meta))
+        base_score = -float(rank_val)
+        preference_score = _soft_preference_score(meta, request.soft_prefs, config)
+        score = base_score + preference_score
+        if parent_asin in rejected:
+            score -= rejected_penalty
+        if preference_score != 0.0 or parent_asin in rejected:
+            soft_pref_changed_order = True
+        candidates.append(Candidate(
+            parent_asin=parent_asin,
+            score=score,
+            route="bm25+soft_prefs" if preference_score != 0.0 or parent_asin in rejected else "bm25",
+            meta=meta,
+        ))
+    if soft_pref_changed_order:
+        candidates.sort(key=lambda candidate: (-candidate.score, candidate.parent_asin))
     # BM25 applies no hard category filter and runs no relaxation ladder, so the surviving
     # pool is just what FTS5 returned and nothing was dropped. Phases 6+ populate these for real.
     return RetrievalResult(candidates, pool_size=len(candidates), dropped_constraints=[])

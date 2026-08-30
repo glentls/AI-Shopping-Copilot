@@ -104,6 +104,13 @@ class Agent:
         )
         state.canonical_query = dialog_result.canonical_query
         state.slots = dialog_result.slots
+        if dialog_result.ask_attribute and dialog_result.ask_attribute not in state.asked_attributes:
+            state.asked_attributes.append(dialog_result.ask_attribute)
+        if dialog_result.intent:
+            state.intent = dialog_result.intent
+        # Record the turn before distillation so current-turn confirmations or rejections
+        # are available immediately. The same entry is not appended again after retrieval.
+        state.history.append({"turn": turn, "user_message": user_message, "ask_attribute": dialog_result.ask_attribute})
 
         memory_profile = self._call_with_fallback(
             memory_primary, memory_null, self.config["timeouts"]["memory_seconds"],
@@ -128,7 +135,6 @@ class Agent:
         )
 
         recommendations = self._ensure_top_k(ranked, effective_top_k)
-        state.history.append({"turn": turn, "user_message": user_message, "ask_attribute": dialog_result.ask_attribute})
 
         return AgentResponse(
             recommendations=recommendations,

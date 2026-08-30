@@ -1,5 +1,5 @@
 """Memory leaf component. Never imports retrieval/, ranking/, or dialog/."""
 
-from .null_memory import distill
+from .distiller import distill
 
 __all__ = ["distill"]

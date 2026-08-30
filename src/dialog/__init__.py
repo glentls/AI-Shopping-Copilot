@@ -1,5 +1,5 @@
 """Dialog leaf component. Never imports retrieval/, ranking/, or memory/."""
 
-from .null_dialog import update
+from .rule_based import update
 
 __all__ = ["update"]

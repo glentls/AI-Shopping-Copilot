@@ -29,11 +29,22 @@ retrieval:
     description: 1.0
   max_query_terms: 40
   index_batch_size: 1000
+  soft_pref_match_weight: 0.12
+  soft_pref_negative_weight: 0.18
+  rejected_asin_penalty: 1000000.0
 
 ranking:
   # Depth of the candidate list the reranker is allowed to reorder. NullReranker ignores this
   # (it returns input order unchanged) but a real reranker must respect it.
   rerank_depth: 30
+
+memory:
+  positive_weight: 1.0
+  profile_weight: 0.35
+  negative_weight: 1.0
+  max_values_per_field: 8
+  max_rejected_asins: 20
+  summary_max_chars: 500
 
 fallback:
   # If a session ends with fewer than top_k valid recommendations (e.g. an empty-query miss),
