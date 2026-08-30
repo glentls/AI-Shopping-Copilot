@@ -16,5 +16,6 @@ hand-builds the contract inline.
 
 from src.output.followup import FollowUpContext
 from src.output.formatter import OutputFormatter
+from src.output.llm_followup import build_llm_ask_message
 
-__all__ = ["OutputFormatter", "FollowUpContext"]
+__all__ = ["OutputFormatter", "FollowUpContext", "build_llm_ask_message"]

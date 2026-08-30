@@ -26,7 +26,7 @@ from src.confidence.policy import DEFAULT_THETA, exposure, missing_topics
 from src.intent_router import build_search_key, detect_scenario, extract_attributes
 from src.intent_router.constraint_memory import ConstraintMemory
 from src.ledger.ledger import LedgerService
-from src.output import FollowUpContext, OutputFormatter
+from src.output import FollowUpContext, OutputFormatter, build_llm_ask_message
 from src.reranker import build_reranker, default_query
 from src.reranker.rank import retrieval_mode
 
@@ -80,6 +80,17 @@ def ask_policy() -> str:
     return os.environ.get("ASK_POLICY", "always_ask").strip() or "always_ask"
 
 
+def followup_mode() -> str:
+    """Ship default is ``hardcoded`` (the bundled-missing-attributes system,
+    src.output.followup) -- completely unaffected unless this is explicitly
+    changed. ``FOLLOWUP_MODE=llm`` swaps in an experimental LLM-generated
+    follow-up message (src.output.llm_followup.build_llm_ask_message),
+    grounded in the actual recommended products for the turn. Message text
+    only -- never changes ask_attribute/recommendations, so this carries no
+    scoring risk either way (see llm_followup's module docstring)."""
+    return os.environ.get("FOLLOWUP_MODE", "hardcoded").strip().lower() or "hardcoded"
+
+
 class Agent:
     """Full pipeline agent: Intent -> Ledger -> Retrieval/Rerank -> Confidence -> Output."""
 
@@ -97,6 +108,7 @@ class Agent:
         self._popularity = popularity_top10(self._catalog_path)
         self._mode = retrieval_mode()
         self._ask_policy = ask_policy()
+        self._followup_mode = followup_mode()
         # Confidence state, keyed by session_id (parallel to the structured ledger).
         self._sessions: dict[str, SessionLedger] = {}
         # Turn-1 opening message per session -- carries the verbatim coarse
@@ -255,7 +267,16 @@ class Agent:
             override_seen=conf_ledger.override_seen,
             missing_attrs=tuple(missing),
         )
-        return self._formatter.format(payload, recommendations[:reveal], context=followup_context)
+        override_message = None
+        if payload.clarify and self._followup_mode == "llm":
+            products = self._product_briefs(recommendations[:reveal])
+            override_message = build_llm_ask_message(followup_context, products)
+        return self._formatter.format(
+            payload,
+            recommendations[:reveal],
+            context=followup_context,
+            override_message=override_message,
+        )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -278,3 +299,25 @@ class Agent:
         if price_c:
             constraints.append(f"budget around ${price_c['amount']}")
         return constraints
+
+    def _product_briefs(self, parent_asins: list[str]) -> list[dict]:
+        """Read-only title lookup for the LLM follow-up experiment (display
+        only -- never influences retrieval/ranking, which have already run
+        by the time this is called). Falls back to just the asin (no title)
+        on any lookup problem; never raises."""
+        if not parent_asins:
+            return []
+        try:
+            catalog = self._reranker.catalog
+            placeholders = ",".join("?" for _ in parent_asins)
+            rows = catalog.execute(
+                f"SELECT parent_asin, title FROM products WHERE parent_asin IN ({placeholders})",
+                list(parent_asins),
+            )
+            by_asin = {asin: title for asin, title in rows}
+            return [
+                {"parent_asin": asin, "title": by_asin.get(asin, "")}
+                for asin in parent_asins
+            ]
+        except Exception:
+            return [{"parent_asin": asin, "title": ""} for asin in parent_asins]

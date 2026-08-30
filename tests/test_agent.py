@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 
 from src.agent import Agent
 
@@ -59,6 +61,47 @@ class FollowUpMissingAttributesTest(unittest.TestCase):
         second = self.agent.respond(session_id, "black cotton", 2, 10)
         self.assertNotIn("material", second["message"].lower())
         self.assertNotIn("color", second["message"].lower())
+
+
+class FollowUpModeLlmTest(unittest.TestCase):
+    """FOLLOWUP_MODE=llm is opt-in and experimental; without Docker Model
+    Runner reachable it must fall back cleanly and never break the turn
+    contract -- these tests lock in that guarantee. Live LLM phrasing needs
+    Docker Model Runner running and is out of scope for this sandbox."""
+
+    def test_llm_mode_falls_back_and_keeps_contract_shape(self) -> None:
+        with patch.dict(os.environ, {"FOLLOWUP_MODE": "llm"}, clear=False):
+            agent = Agent()
+        session_id = "llm-followup-fallback"
+        agent.reset(session_id, dict(_PROFILE))
+        result = agent.respond(session_id, "i want a shirt", 1, 10)
+        self.assertIn("message", result)
+        self.assertIn("ask_attribute", result)
+        self.assertIn("recommendations", result)
+        self.assertIn("usage", result)
+        self.assertTrue(result["message"])
+
+    def test_default_mode_is_hardcoded_when_env_var_unset(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FOLLOWUP_MODE", None)
+            agent = Agent()
+        self.assertEqual(agent._followup_mode, "hardcoded")
+
+    def test_product_briefs_returns_asin_and_title(self) -> None:
+        agent = Agent()
+        session_id = "llm-followup-briefs"
+        agent.reset(session_id, dict(_PROFILE))
+        result = agent.respond(session_id, "i want a shirt", 1, 10)
+        asins = [r["parent_asin"] for r in result["recommendations"]]
+        briefs = agent._product_briefs(asins)
+        self.assertEqual(len(briefs), len(asins))
+        for brief in briefs:
+            self.assertIn("parent_asin", brief)
+            self.assertIn("title", brief)
+
+    def test_product_briefs_empty_input_returns_empty_list(self) -> None:
+        agent = Agent()
+        self.assertEqual(agent._product_briefs([]), [])
 
 
 if __name__ == "__main__":

@@ -54,6 +54,7 @@ class OutputFormatter:
         recommendations: list[str],
         usage: dict | None = None,
         context: FollowUpContext | None = None,
+        override_message: str | None = None,
     ) -> dict:
         """Build the contract dict from a decision payload and recommendations.
 
@@ -65,11 +66,18 @@ class OutputFormatter:
         :class:`~src.output.followup.FollowUpContext`). When omitted, falls
         back to the legacy static ``_QUESTION_BY_ATTRIBUTE``/``_RECOMMEND_MESSAGE``
         phrasing -- existing callers are unaffected.
+
+        ``override_message`` (optional): use this exact string as ``message``
+        instead of computing one from ``context`` -- e.g. an LLM-generated
+        follow-up (see ``src.output.llm_followup``). Only ever changes the
+        *text*; ``ask_attribute``/``recommendations`` are unaffected either way.
         """
         recs = [{"parent_asin": asin} for asin in recommendations[:10]]
 
         if payload.clarify and payload.ask_attribute:
-            if context is not None:
+            if override_message is not None:
+                message = override_message
+            elif context is not None:
                 message = build_all_missing_ask_message(context)
             else:
                 message = _QUESTION_BY_ATTRIBUTE.get(
@@ -77,7 +85,10 @@ class OutputFormatter:
                 )
             ask_attribute = payload.ask_attribute
         else:
-            message = build_recommend_message(context) if context is not None else _RECOMMEND_MESSAGE
+            if override_message is not None:
+                message = override_message
+            else:
+                message = build_recommend_message(context) if context is not None else _RECOMMEND_MESSAGE
             ask_attribute = None
 
         return {
