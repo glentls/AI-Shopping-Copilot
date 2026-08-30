@@ -143,7 +143,10 @@ class MessageParserAttributeTest(unittest.TestCase):
     def test_to_dict_shape(self) -> None:
         parsed = self.parser.parse("black leather boots size 9")
         payload = parsed.to_dict()
-        self.assertEqual(set(payload.keys()), {"raw_text", "keywords", "attributes", "signals"})
+        self.assertEqual(
+            set(payload.keys()),
+            {"raw_text", "keywords", "attributes", "intent", "category", "product", "signals"},
+        )
         self.assertEqual(
             set(payload["signals"].keys()), {"is_override", "is_no_preference", "is_vague"}
         )

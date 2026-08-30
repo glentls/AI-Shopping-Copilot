@@ -21,11 +21,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.confidence import SessionLedger, popularity_top10, safe_decide
-from src.confidence.policy import DEFAULT_THETA
+from src.confidence.policy import DEFAULT_THETA, exposure
 from src.intent_router import build_search_key, detect_scenario, extract_attributes
+from src.intent_router.constraint_memory import ConstraintMemory
 from src.ledger.ledger import LedgerService
 from src.output import OutputFormatter
 from src.reranker import build_reranker, default_query
+from src.reranker.rank import retrieval_mode
 
 
 @dataclass
@@ -84,12 +86,20 @@ class Agent:
         # Eager build: FTS5 index + catalog load happen once, up front.
         self._reranker = build_reranker(self._catalog_path)
         self._popularity = popularity_top10(self._catalog_path)
+        self._mode = retrieval_mode()
         # Confidence state, keyed by session_id (parallel to the structured ledger).
         self._sessions: dict[str, SessionLedger] = {}
+        # Turn-1 opening message per session -- carries the verbatim coarse
+        # category the bucket resolver keys off, disclosed once and reused.
+        self._openings: dict[str, str] = {}
+        # Cumulative verbatim constraint memory (evict-on-value-conflict).
+        self._memory: dict[str, ConstraintMemory] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         self._ledger.create(session_id, user_profile or {})
         self._sessions[session_id] = SessionLedger(session_id=session_id)
+        self._openings.pop(session_id, None)
+        self._memory[session_id] = ConstraintMemory()
 
     def respond(
         self,
@@ -102,6 +112,13 @@ class Agent:
         conf_ledger = self._sessions.setdefault(
             session_id, SessionLedger(session_id=session_id)
         )
+        # The first message of the session carries the coarse category; keep it
+        # for the bucket resolver, which needs the opening line, not later turns.
+        opening = self._openings.setdefault(session_id, user_message)
+        # Accumulate verbatim disclosed constraints (with value-conflict
+        # supersession) before ranking this turn.
+        memory = self._memory.setdefault(session_id, ConstraintMemory())
+        memory.add_message(user_message, turn)
 
         # -- 1. Intent Router --------------------------------------------------
         session = self._ledger.read(session_id)
@@ -165,8 +182,23 @@ class Agent:
         query = default_query(constraints, user_message)
 
         # -- 6. Retrieval + Rerank + Decision (never raises) ------------------
+        if self._mode == "legacy":
+            rank_fn = lambda: self._reranker.rank(query, constraints, top_k=top_k)
+        else:
+            # Bucket mode ranks against the verbatim constraint memory, not the
+            # taxonomy-routed strings -- the disclosed strings are literal
+            # slices of the target's metadata and match exactly within a bucket.
+            verbatim = memory.constraints
+            transcript = " ".join(
+                str(h.get("content", ""))
+                for h in session.get("history", [])
+                if h.get("role") == "user"
+            )
+            rank_fn = lambda: self._reranker.rank_bucket(
+                opening, verbatim, top_k=top_k, transcript=transcript
+            )
         payload, recommendations = safe_decide(
-            lambda: self._reranker.rank(query, constraints, top_k=top_k),
+            rank_fn,
             conf_ledger,
             self._popularity,
             theta=self._theta,
@@ -175,8 +207,15 @@ class Agent:
         if payload.ask_attribute:
             conf_ledger.note_ask(payload.ask_attribute)
 
-        # -- 7. Format response ------------------------------------------------
-        return self._formatter.format(payload, recommendations)
+        # -- 7. Exposure gate + format ----------------------------------------
+        # Reveal one candidate on turns 1-2, the full list from turn 3 (or once
+        # the card is drained / on the final turn). Legacy mode keeps the old
+        # unconditional full-list behaviour.
+        if self._mode == "legacy":
+            reveal = top_k
+        else:
+            reveal = exposure(turn, conf_ledger.exhausted, top_k)
+        return self._formatter.format(payload, recommendations[:reveal])
 
     # ------------------------------------------------------------------
     # Helpers
