@@ -27,6 +27,26 @@ TURN_CUTOFF = 10           # stop asking at/after this turn (a None ask is a
 FIXED_ASK_ATTRIBUTE = "other"
 FINAL_TURN = 10
 
+# Message-phrasing topic order for next_unasked_topic ONLY (decide_specific_
+# attribute keeps the original ATTRIBUTE_PRIORITY it was measured against --
+# reordering it would invalidate that already-reported A/B result without
+# re-measuring). Grounded in the team's own oracle study: actual
+# constraint-type frequency across all 200 public sessions' disclosed cards
+# -- feature 404, material 302, color 60, style 19, size 11, use_case 4;
+# budget "effectively never survives the card's 4-slot cut"; brand not
+# observed at all (see docs/project_description.md, Experiment 1 side
+# findings). Higher-frequency types are asked first: more likely to be what
+# the customer's card actually contains, which reads as smarter in the demo.
+# "category" is placed first regardless of that frequency ranking -- it's
+# always disclosed verbatim in the opening line under the evaluator's fixed
+# templates, so it's normally already known and skipped in practice (see
+# known_attrs in next_unasked_topic), and remains the sensible opener on the
+# rare turn it genuinely isn't known yet.
+TOPIC_PRIORITY = (
+    "category", "feature", "material", "color", "style",
+    "size", "use_case", "budget", "brand",
+)
+
 # Exposure gate. The evaluator freezes MRR at the target's first top-10
 # appearance, so a full list on turn 1 with only one generic constraint locks
 # in a mid-list rank permanently. Exposing exactly one candidate keeps the
@@ -96,9 +116,10 @@ def decide(
 
 
 def next_unasked_topic(ledger: SessionLedger, known_attrs: set[str] | None = None) -> str | None:
-    """Pick the next specific attribute (from ``ATTRIBUTE_PRIORITY``, excluding
-    the "other" wildcard) not yet suggested as a message topic this session,
-    and not already disclosed as a constraint.
+    """Pick the next specific attribute (from ``TOPIC_PRIORITY``, weighted by
+    measured constraint-type frequency -- see that constant's docstring) not
+    yet suggested as a message topic this session, and not already disclosed
+    as a constraint.
 
     This is a message-phrasing helper ONLY -- it never touches the actual
     ``ask_attribute`` the API contract returns (that stays the "other"
@@ -107,17 +128,12 @@ def next_unasked_topic(ledger: SessionLedger, known_attrs: set[str] | None = Non
     responsible for recording the returned topic via ``ledger.note_ask()``
     once it's used, so the same topic isn't suggested twice; ``asked_attributes``
     already always contains "other" from the real ask, which this function
-    ignores by construction (excluded from ``ATTRIBUTE_PRIORITY`` iteration),
-    so the two uses of the same set coexist without interfering.
+    ignores by construction ("other" is not in ``TOPIC_PRIORITY``), so the
+    two uses of the same set coexist without interfering.
     """
     known_attrs = known_attrs or set()
     covered = ledger.asked_attributes | known_attrs
-    for attr in ATTRIBUTE_PRIORITY:
-        if attr == "other":
-            continue
-        if attr not in covered:
-            return attr
-    return None
+    return next((attr for attr in TOPIC_PRIORITY if attr not in covered), None)
 
 
 def decide_specific_attribute(

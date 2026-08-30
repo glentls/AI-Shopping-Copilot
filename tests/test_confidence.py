@@ -8,6 +8,7 @@ from src.confidence.fallback import safe_decide
 from src.confidence.session_ledger import SessionLedger
 from src.confidence.policy import (
     DEFAULT_THETA,
+    TOPIC_PRIORITY,
     TURN_CUTOFF,
     decide,
     decide_specific_attribute,
@@ -239,16 +240,39 @@ class AttributeCyclePolicyTest(unittest.TestCase):
 
 class NextUnaskedTopicTest(unittest.TestCase):
     """next_unasked_topic: message-phrasing-only helper, safe to use under
-    always_ask (never touches the real ask_attribute the contract returns)."""
+    always_ask (never touches the real ask_attribute the contract returns).
+    Ordered by TOPIC_PRIORITY (measured constraint-type frequency), not the
+    ledger's ATTRIBUTE_PRIORITY."""
 
-    def test_first_call_returns_first_priority_attribute(self) -> None:
+    def test_first_call_returns_category_first(self) -> None:
+        # category is placed first regardless of frequency ranking -- see
+        # TOPIC_PRIORITY's docstring (natural opener when genuinely unknown).
         ledger = SessionLedger("s", turn=1)
-        self.assertEqual(next_unasked_topic(ledger), ATTRIBUTE_PRIORITY[0])
+        self.assertEqual(next_unasked_topic(ledger), "category")
+
+    def test_frequency_order_after_category(self) -> None:
+        # feature(404) > material(302) > color(60) > style(19) > size(11) >
+        # use_case(4) -- the team's measured constraint-type breakdown.
+        ledger = SessionLedger("s", turn=1)
+        ledger.note_ask("category")
+        for expected in ("feature", "material", "color", "style", "size", "use_case"):
+            self.assertEqual(next_unasked_topic(ledger), expected)
+            ledger.note_ask(expected)
+
+    def test_budget_and_brand_come_last(self) -> None:
+        # budget "effectively never survives the card's 4-slot cut"; brand
+        # was not observed at all -- both are lowest priority.
+        ledger = SessionLedger("s", turn=1)
+        for attr in ("category", "feature", "material", "color", "style", "size", "use_case"):
+            ledger.note_ask(attr)
+        self.assertEqual(next_unasked_topic(ledger), "budget")
+        ledger.note_ask("budget")
+        self.assertEqual(next_unasked_topic(ledger), "brand")
 
     def test_never_suggests_the_same_topic_twice(self) -> None:
         ledger = SessionLedger("s", turn=1)
         seen: set[str] = set()
-        for _ in range(len(ATTRIBUTE_PRIORITY) - 1):  # -1: "other" is excluded
+        for _ in range(len(TOPIC_PRIORITY)):
             topic = next_unasked_topic(ledger)
             self.assertIsNotNone(topic)
             self.assertNotIn(topic, seen)
@@ -257,7 +281,7 @@ class NextUnaskedTopicTest(unittest.TestCase):
 
     def test_returns_none_once_every_specific_attribute_suggested(self) -> None:
         ledger = SessionLedger("s", turn=1)
-        for attr in ATTRIBUTE_PRIORITY:
+        for attr in TOPIC_PRIORITY:
             ledger.note_ask(attr)
         self.assertIsNone(next_unasked_topic(ledger))
 
@@ -267,20 +291,21 @@ class NextUnaskedTopicTest(unittest.TestCase):
         ledger = SessionLedger("s", turn=1)
         ledger.note_ask("other")
         self.assertNotEqual(next_unasked_topic(ledger), "other")
+        self.assertNotIn("other", TOPIC_PRIORITY)
 
     def test_skips_attributes_already_disclosed_as_constraints(self) -> None:
         ledger = SessionLedger("s", turn=1)
-        known = {ATTRIBUTE_PRIORITY[0]}
-        self.assertNotEqual(next_unasked_topic(ledger, known_attrs=known), ATTRIBUTE_PRIORITY[0])
+        known = {"category"}
+        self.assertNotEqual(next_unasked_topic(ledger, known_attrs=known), "category")
 
     def test_example_scenario_no_preference_reply_does_not_repeat_topic(self) -> None:
-        # The exact requested scenario: agent's message asks about "color"
-        # (as a phrasing topic), customer says no preference, that topic
-        # must not be suggested again -- while the real ask_attribute stays
-        # "other" throughout (always_ask never changes).
+        # The exact requested scenario: agent's message asks about a topic,
+        # customer says no preference, that topic must not be suggested
+        # again -- while the real ask_attribute stays "other" throughout
+        # (always_ask never changes).
         ledger = SessionLedger("s", turn=1)
         topic = next_unasked_topic(ledger)
-        self.assertEqual(topic, ATTRIBUTE_PRIORITY[0])
+        self.assertEqual(topic, "category")
         ledger.note_ask(topic)  # message referenced this topic
         ledger.note_ask("other")  # the real (unchanged) ask_attribute
         ledger.observe(f"I don't have a preference for {topic}; please use your judgment.", turn=2)
