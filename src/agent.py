@@ -225,7 +225,19 @@ class Agent:
         # under always_ask). Recomputed fresh from known_attrs each turn --
         # no per-session state, so a missing attribute keeps being asked
         # about until it's actually known.
-        missing = missing_topics(known_attrs) if payload.clarify else []
+        #
+        # known_attrs_for_missing (not known_attrs itself, to leave
+        # safe_decide/decide_specific_attribute's already-measured behaviour
+        # untouched): also counts budget as known when price_constraint is
+        # set. A dollar-sign-less disclosure ("under 50") bypasses extract_
+        # attributes()'s own budget regex (which requires a literal "$"),
+        # but _parse_price_constraint already understands it and the search
+        # layer already uses it -- the follow-up question shouldn't keep
+        # asking about something already effectively provided.
+        known_attrs_for_missing = set(known_attrs)
+        if session.get("price_constraint"):
+            known_attrs_for_missing.add("budget")
+        missing = missing_topics(known_attrs_for_missing) if payload.clarify else []
 
         # -- 7. Exposure gate + format ----------------------------------------
         # Reveal one candidate on turns 1-2, the full list from turn 3 (or once
