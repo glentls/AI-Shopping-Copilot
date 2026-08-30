@@ -298,6 +298,18 @@ ranking:
       - features
       - store
       - price
+  listwise:
+    # Optional external reranker. It is never used unless enabled and api_key_env is present.
+    enabled: false
+    provider: "openai"
+    model: "gpt-4o-mini"
+    api_key_env: "OPENAI_API_KEY"
+    max_candidates: 20
+    # These are dormant while enabled is false or the configured key is absent.
+    prompt_instruction: "Return only a JSON array of candidate parent_asin strings, ordered best first."
+    temperature: 0.0
+    max_output_tokens: 256
+
 memory:
   positive_weight: 1.0
   profile_weight: 0.35

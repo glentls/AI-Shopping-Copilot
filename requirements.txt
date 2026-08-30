@@ -10,3 +10,5 @@ numpy==2.4.3          # src/retrieval/ imports numpy unconditionally (dense rout
 torch==2.13.0
 sentence-transformers==6.0.0
 # (transformers / huggingface_hub / tokenizers come in as sentence-transformers deps)
+# Optional listwise LLM client; only install if ranking.listwise.enabled is explicitly enabled.
+# openai
