@@ -2,6 +2,29 @@
 
 ## The architecture to build first
 
+### Runtime data flow
+
+```text
+User message + anonymized profile
+              |
+              v
+     agent.py / SessionState
+        |              |
+        v              v
+      dialog       memory.distill
+        |              |
+        +-------> canonical query
+                       + MemoryProfile.boosts
+                                  |
+                                  v
+                         retrieval.soft_prefs
+                                  |
+                                  v
+                           ranking -> Top 10
+```
+
+Memory is scoped to the `SessionState` created by `reset()`. It is not persisted between sessions: `session_id` identifies a conversation for the running agent, not a reusable shopper identity.
+
 One rule drives everything: **`agent.py` orchestrates, components are leaves.** No component ever imports another component. All state flows one direction through a single turn function. This is what makes five people on one pipeline safe.
 
 Four properties make this architecture safe for five people:

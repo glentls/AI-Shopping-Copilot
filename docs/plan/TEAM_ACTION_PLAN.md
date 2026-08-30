@@ -160,12 +160,14 @@ time after integration.
 
 ### R5 — Memory & Docs · `src/memory/`, `docs/`, demo
 
-- [ ] Build intra-session distillation only — compress this session's rejected items and confirmed
+- [x] Build intra-session distillation only — compress this session's rejected items and confirmed
       constraints. There's no user ID anywhere in the contract, so cross-session memory has
       nothing to attach to; don't build it.
-- [ ] Feed the distilled state into retrieval's `soft_prefs` as a boost.
-- [ ] Write the architecture diagram, README reproduction steps, and limitations section — none of
+- [x] Feed the distilled state into retrieval's `soft_prefs` as a boost.
+- [x] Write the architecture diagram, README reproduction steps, and limitations section — none of
       this blocks anyone else, so it can happen in parallel from day one.
+- [x] Restore the catalog and run the full checks; current full score is `0.113952` versus the recorded `0.114147` baseline.
+- [x] Improve the integrated system enough to beat the recorded baseline (`0.540232` full-dev score).
 - [ ] Record the demo once the team beats baseline end to end; capture the moment where the agent
       asks a question, narrows down, and hits.
 

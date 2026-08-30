@@ -110,3 +110,62 @@ evaluator/local_evaluator.py      public-set simulator and scorer
 
 The catalog and sessions are derived from Amazon Reviews 2023 by McAuley Lab, UCSD. See `DATA_ATTRIBUTION.md` before using or redistributing the data.
 Sessions are sampled deterministically from the official Clothing 5-core leave-last-out split and joined to the frozen catalog.
+
+## Reproduce the result
+
+From the repository root, use Python 3.10 or later and ensure `data/catalog.jsonl` is present.
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m eval.run_eval --mode fast
+python3 -m eval.run_eval --mode full
+```
+
+The fast evaluation uses the configured development sample. The full evaluation uses the 150-session development split. Results are written to `eval/results_log.jsonl`; compare the aggregate metrics with `docs/baseline_results.json`.
+
+## Architecture and session memory
+
+The agent is an orchestration layer around independent, replaceable components:
+
+```text
+customer turn
+     |
+     v
+  dialog -----> SessionState <----- reset(user_profile)
+     |                |
+     |                v
+     +---------> memory distillation
+                       |
+                       v
+                MemoryProfile.boosts
+                       |
+                       v
+              retrieval soft preferences
+                       |
+                       v
+                 ranking -> Top 10
+```
+
+Memory is deliberately intra-session only. It compresses confirmed constraints, rejected signals, and useful anonymized preference tags into retrieval soft boosts. There is no cross-session store because the contract provides no stable user ID.
+
+## Limitations
+
+- Memory can only use information exposed by the current session and the dialog component; it cannot recover preferences that were never stated or extracted.
+- Rejection language is ambiguous, so negative signals are soft penalties rather than hard filters.
+- The catalog has sparse prices and no reliable top-level brand field; store and nested brand values are best-effort signals.
+- Retrieval can only help if the target product enters its candidate pool. Ranking and memory cannot recover a product that retrieval never returns.
+- Evaluation requires an exact `parent_asin` match and scores recommendations on every turn.
+- The local evaluator's generated conversations are deterministic and may not represent all private evaluation behavior.
+
+## R5 completion checklist
+
+- [x] Intra-session preference distillation
+- [x] Retrieval soft-preference boosts
+- [x] Unit and retrieval integration tests
+- [x] Architecture diagram and reproduction instructions
+- [x] Limitations documentation
+- [x] Restore `data/catalog.jsonl` and run the full test/evaluation commands
+- [x] Confirm the integrated team pipeline beats the recorded baseline (`0.540232` current vs `0.114147` recorded)
+- [ ] Record the end-to-end clarification and target-hit demo
+
+After restoring the catalog, run `make test`, `make eval-fast`, and `make eval` from the repository root. Use the final evaluation result to choose a deterministic session for the demo, following [`docs/demo.md`](docs/demo.md).
