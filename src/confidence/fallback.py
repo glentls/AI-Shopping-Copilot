@@ -32,18 +32,23 @@ def safe_decide(
     fallback_recs: list[str],
     theta: float,
     policy: str = "always_ask",
+    known_attrs: set[str] | None = None,
 ) -> tuple[ConfidencePayload, list[str]]:
     """Run ranking + policy, guaranteeing no raise.
 
     ``rank_fn`` is a zero-arg callable returning a ``RankResult``. On any
     exception or empty pool we return the popularity fallback with conf=0 and
     clarify=True. ``policy`` selects the clarify decision: ``"always_ask"``
-    (the ship-gate champion arm, see ``scripts/sweep_confidence.py``) or
+    (the ship-gate champion arm, see ``scripts/sweep_confidence.py``),
     ``"confidence"`` (the coverage-based ``decide`` heuristic, gated by
-    ``theta``). Returns ``(payload, recommendations)``.
+    ``theta``), or ``"attribute_cycle"`` (asks a specific, not-yet-asked
+    attribute each turn instead of the fixed "other" wildcard -- see
+    ``decide_specific_attribute``'s docstring for the measured tradeoff;
+    ``known_attrs`` is only consulted by this policy). Returns
+    ``(payload, recommendations)``.
     """
     # Local import to avoid cycles at import time.
-    from src.confidence.policy import always_ask, decide
+    from src.confidence.policy import always_ask, decide, decide_specific_attribute
 
     try:
         rank = rank_fn()
@@ -59,5 +64,10 @@ def safe_decide(
         )
         return payload, list(fallback_recs[:10])
 
-    payload = always_ask(ledger) if policy == "always_ask" else decide(rank, ledger, theta=theta)
+    if policy == "always_ask":
+        payload = always_ask(ledger)
+    elif policy == "attribute_cycle":
+        payload = decide_specific_attribute(rank, ledger, known_attrs=known_attrs)
+    else:
+        payload = decide(rank, ledger, theta=theta)
     return payload, list(rank.ranked[:10])

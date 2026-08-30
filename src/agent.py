@@ -16,6 +16,7 @@ tracks the exhaustion/override signals the confidence policy consumes.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +26,7 @@ from src.confidence.policy import DEFAULT_THETA, exposure
 from src.intent_router import build_search_key, detect_scenario, extract_attributes
 from src.intent_router.constraint_memory import ConstraintMemory
 from src.ledger.ledger import LedgerService
-from src.output import OutputFormatter
+from src.output import FollowUpContext, OutputFormatter
 from src.reranker import build_reranker, default_query
 from src.reranker.rank import retrieval_mode
 
@@ -71,6 +72,14 @@ def _parse_price_constraint(text: str) -> PriceConstraint | None:
     return None
 
 
+def ask_policy() -> str:
+    """Ship default is ``always_ask`` (the measured 0.968-TechScore champion,
+    see docs/project_description.md). ``ASK_POLICY=attribute_cycle`` swaps in
+    the specific-attribute-per-turn, never-repeat policy for A/B measurement;
+    see ``decide_specific_attribute``'s docstring for the tradeoff."""
+    return os.environ.get("ASK_POLICY", "always_ask").strip() or "always_ask"
+
+
 class Agent:
     """Full pipeline agent: Intent -> Ledger -> Retrieval/Rerank -> Confidence -> Output."""
 
@@ -87,6 +96,7 @@ class Agent:
         self._reranker = build_reranker(self._catalog_path)
         self._popularity = popularity_top10(self._catalog_path)
         self._mode = retrieval_mode()
+        self._ask_policy = ask_policy()
         # Confidence state, keyed by session_id (parallel to the structured ledger).
         self._sessions: dict[str, SessionLedger] = {}
         # Turn-1 opening message per session -- carries the verbatim coarse
@@ -202,7 +212,8 @@ class Agent:
             conf_ledger,
             self._popularity,
             theta=self._theta,
-            policy="always_ask",
+            policy=self._ask_policy,
+            known_attrs=set(session.get("constraints", {}).keys()),
         )
         if payload.ask_attribute:
             conf_ledger.note_ask(payload.ask_attribute)
@@ -215,7 +226,15 @@ class Agent:
             reveal = top_k
         else:
             reveal = exposure(turn, conf_ledger.exhausted, top_k)
-        return self._formatter.format(payload, recommendations[:reveal])
+        followup_context = FollowUpContext(
+            scenario=scenario,
+            n_constraints_known=conf_ledger.n_constraints_known,
+            exhausted=conf_ledger.exhausted,
+            turn=turn,
+            override_seen=conf_ledger.override_seen,
+            ask_attribute=payload.ask_attribute,
+        )
+        return self._formatter.format(payload, recommendations[:reveal], context=followup_context)
 
     # ------------------------------------------------------------------
     # Helpers

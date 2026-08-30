@@ -18,6 +18,7 @@ import os
 from src.confidence.confidence import compute_confidence
 from src.confidence.session_ledger import SessionLedger
 from src.confidence.payload import ConfidencePayload
+from src.ledger.ledger import ATTRIBUTE_PRIORITY
 from src.reranker.types import RankResult
 
 DEFAULT_THETA = 0.5
@@ -91,6 +92,54 @@ def decide(
         clarify=clarify,
         ask_attribute=ask_attribute,
         reason=reason,
+    )
+
+
+def decide_specific_attribute(
+    rank: RankResult,
+    ledger: SessionLedger,
+    known_attrs: set[str] | None = None,
+) -> ConfidencePayload:
+    """Ask-specific-attribute policy: pick the next unasked, undisclosed
+    attribute from ``ATTRIBUTE_PRIORITY`` each turn (never repeats one already
+    asked this session, and skips attributes already disclosed as a
+    constraint). ``ATTRIBUTE_PRIORITY`` ends in "other" as a final wildcard
+    sweep once every specific attribute is covered, before genuinely stopping.
+
+    NOTE -- measured risk, not a drop-in upgrade: the evaluator's
+    ``customer_reply()`` treats ``ask_attribute="other"`` as a wildcard
+    revealing ANY undisclosed constraint (up to 2/turn), while a specific
+    attribute only reveals constraints classified as that exact type. Most
+    constraint slots on the public set are "feature"/"material", not the
+    narrower attributes (see docs/project_description.md Experiment 2), so
+    this policy risks more zero-information turns than always asking "other".
+    Select via ``ASK_POLICY=attribute_cycle``; ``always_ask`` remains the
+    shipped default.
+    """
+    known_attrs = known_attrs or set()
+    covered = ledger.asked_attributes | known_attrs
+    next_attr = next((a for a in ATTRIBUTE_PRIORITY if a not in covered), None)
+
+    score, reason = compute_confidence(rank, ledger.n_constraints_known)
+
+    if ledger.exhausted:
+        return ConfidencePayload(
+            score=score, clarify=False, ask_attribute=None,
+            reason=f"exhausted -> recommend only ({reason})",
+        )
+    if ledger.turn >= TURN_CUTOFF:
+        return ConfidencePayload(
+            score=score, clarify=False, ask_attribute=None,
+            reason=f"turn cutoff reached -> recommend only ({reason})",
+        )
+    if next_attr is None:
+        return ConfidencePayload(
+            score=score, clarify=False, ask_attribute=None,
+            reason=f"every attribute already asked or known ({reason})",
+        )
+    return ConfidencePayload(
+        score=score, clarify=True, ask_attribute=next_attr,
+        reason=f"asking unasked attribute '{next_attr}' ({reason})",
     )
 
 
