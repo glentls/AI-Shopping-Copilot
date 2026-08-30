@@ -16,8 +16,9 @@ Going from 50,000 candidates to 10 needs about 12 halvings.
 
 Each turn every askable slot is scored by expected information gain -- the
 entropy of how the answer would split the remaining candidates -- discounted by
-how often the catalog can answer it at all. The wildcard "other" competes on
-the same scale, priced by what it has actually yielded so far in THIS session.
+how often the catalog can answer it at all. The open-ended ``other`` action
+competes on the same scale, priced by what it has yielded in THIS session and
+discounted each time it is used.
 """
 
 from __future__ import annotations
@@ -42,36 +43,47 @@ PRIOR = {
 }
 BUNDLE_SIZE = 3
 
-# "other" is an ACTION, not a slot, and it must compete with the concrete slots
-# for every turn. It is the wildcard: it yields whatever preferences the
-# customer still has, where a concrete slot yields only if they happen to hold
-# one of that type. Measured on the public set: asking "other" every turn
-# scores 0.7632, while picking the highest-entropy concrete slot scores 0.6706.
-# Information you reliably GET beats information that would be more valuable if
-# you got it.
+# "other" is an ACTION, not a slot. It asks the customer an open-ended
+# "anything else?" question, while concrete actions ask about one known topic.
+# The two kinds of action compete on the same order of magnitude.
 #
-# Sweep with TJ_OTHER_BASELINE (python3 -m tools.bench --sweep). The measured
-# curve on the public set is 0->0.690, 1->0.704, 3->0.721, 8->0.747, 20->0.748:
-# it saturates, because this simulator only ever answers budget, material,
-# color, size, style, use_case and feature (see classify_constraint in the
-# evaluator), so asking "brand" or "category" is a guaranteed dead turn.
-#
-# This constant is only the PRIOR now, not the verdict. A real customer answers
-# a specific question better than a vague one, so the moment messages become
-# natural language the wildcard has to earn its place from observed yield --
-# which is exactly what other_value() below makes it do.
-OTHER_BASELINE = float(os.environ.get("TJ_OTHER_BASELINE", "20.0"))
+# The former default of 20 came from the public simulator and dwarfed concrete
+# question scores, so a human could be asked "anything else?" for many turns.
+# Eight gives one broad question a modest lead over the strongest concrete
+# question; outcome-aware guardrails, rather than an oversized prior, govern
+# whether it may be asked again.
+OPEN_QUESTION_BASELINE = float(
+    os.environ.get("TJ_OPEN_QUESTION_BASELINE", "8.0")
+)
 
-# Facts a productive wildcard turn is expected to return. The public simulator
+# Preferences are finite: even productive open questions have diminishing
+# returns. This discount is applied once per answered open question.
+OPEN_QUESTION_DECAY = float(
+    os.environ.get("TJ_OPEN_QUESTION_DECAY", "0.8")
+)
+
+# Facts a productive open-ended turn is expected to return. The public simulator
 # discloses up to two constraints per answer (`matches[:2]`), so two is the
-# number to beat here; anything less and the wildcard starts losing turns to
+# number to beat here; anything less makes the open question lose value against
 # concrete slots.
-PRIOR_YIELD = float(os.environ.get("TJ_OTHER_PRIOR_YIELD", "2.0"))
+OPEN_QUESTION_EXPECTED_YIELD = float(
+    os.environ.get("TJ_OPEN_QUESTION_EXPECTED_YIELD", "2.0")
+)
 
-# How many pseudo-observations of PRIOR_YIELD the prior is worth. Low enough
-# that two genuinely silent turns move the estimate, high enough that one
-# unlucky turn does not abandon a strategy that works.
-PRIOR_STRENGTH = float(os.environ.get("TJ_OTHER_PRIOR_STRENGTH", "2.0"))
+# A productive answer can keep the action competitive, but never cancels the
+# per-use decay. A silent answer sharply lowers the next eligible score.
+HIGH_YIELD_FACTOR = 1.25
+SINGLE_YIELD_FACTOR = 0.90
+ZERO_YIELD_FACTOR = 0.35
+
+# Guardrails are separate from the estimated score. They make the customer
+# experience predictable even if benchmark tuning changes the score constants.
+MAX_CONSECUTIVE_OPEN_QUESTIONS = int(
+    os.environ.get("TJ_OPEN_QUESTION_MAX_CONSECUTIVE", "2")
+)
+ZERO_YIELD_PATIENCE = int(
+    os.environ.get("TJ_OPEN_QUESTION_ZERO_YIELD_PATIENCE", "2")
+)
 
 # One answer cannot realistically deliver more than a few bits, but raw entropy
 # over a high-cardinality slot says otherwise: `brand` has 19,749 distinct
@@ -80,9 +92,11 @@ PRIOR_STRENGTH = float(os.environ.get("TJ_OTHER_PRIOR_STRENGTH", "2.0"))
 # buy the turn.
 GAIN_CAP = 4.0
 
-# Refusals of "anything else?" to sit through before giving up on the wildcard.
-# Must be at least 2: a boundary customer declines whatever we ask first.
-DECLINE_PATIENCE = int(os.environ.get("TJ_DECLINE_PATIENCE", "2"))
+# Explicit refusals of "anything else?" to accept before disabling it for the
+# current intent. Intent overrides reset all of these derived counters.
+OPEN_QUESTION_DECLINE_PATIENCE = int(
+    os.environ.get("TJ_OPEN_QUESTION_DECLINE_PATIENCE", "2")
+)
 
 def _entropy(counts: dict[str, int]) -> float:
     total = sum(counts.values())
@@ -122,10 +136,10 @@ def score_slots(
     return scored
 
 
-def _answered(state: ConversationState) -> list[tuple[int, str, str]]:
-    """(reply turn, question, reply) records for the current intent."""
+def _intent_start_turn(state: ConversationState) -> int:
+    """First customer turn in the current intent."""
     said = [text for role, text in state.history if role == "customer"]
-    intent_start = max(
+    return max(
         (
             turn
             for turn, text in enumerate(said, start=1)
@@ -133,10 +147,18 @@ def _answered(state: ConversationState) -> list[tuple[int, str, str]]:
         ),
         default=1,
     )
+
+
+def _answered(state: ConversationState) -> list[tuple[int, str, str]]:
+    """(reply turn, question, reply) records for the current intent."""
+    said = [text for role, text in state.history if role == "customer"]
+    intent_start = _intent_start_turn(state)
     answered: list[tuple[int, str, str]] = []
     for question_turn, action in state.question_history:
         reply_turn = question_turn + 1
-        if reply_turn < intent_start or reply_turn > len(said):
+        # A question asked before an override belongs to the previous intent,
+        # even when the customer's reply is the message that changes intent.
+        if question_turn < intent_start or reply_turn > len(said):
             continue
         answered.append((reply_turn, action, said[reply_turn - 1]))
     return answered
@@ -150,8 +172,8 @@ def _replies_to(state: ConversationState) -> dict[str, list[int]]:
     return observed
 
 
-def wildcard_declines(state: ConversationState) -> int:
-    """Wildcard refusals in this intent, even when other questions intervene."""
+def open_question_declines(state: ConversationState) -> int:
+    """Open-question refusals, even when concrete questions intervene."""
     return sum(
         1
         for _, action, reply in _answered(state)
@@ -159,33 +181,61 @@ def wildcard_declines(state: ConversationState) -> int:
     )
 
 
-def other_value(state: ConversationState) -> float:
-    """What the wildcard is worth this turn, priced by what it has returned.
+def open_question_zero_yields(state: ConversationState) -> int:
+    """Answered open questions that taught no new structured facts."""
+    return sum(
+        1
+        for reply_turn, action, _ in _answered(state)
+        if action == "other" and learned_on(state, reply_turn) == 0
+    )
 
-    The wildcard starts on its prior and is then marked to market. Shrinking
-    the observed yield towards PRIOR_YIELD keeps one quiet turn from abandoning
-    a strategy that works, while a customer who has genuinely run out of
-    preferences drives the estimate to zero within a couple of turns and hands
-    the turn to a concrete slot.
 
-    This replaces a fixed constant on purpose. The constant is tuned to a
-    simulator that answers "anything else?" with two verbatim catalog strings;
-    a real customer will not, and the estimator notices without anyone
-    re-tuning it.
+def consecutive_open_questions(state: ConversationState) -> int:
+    """Consecutive open questions asked under the current intent."""
+    count = 0
+    intent_start = _intent_start_turn(state)
+    for question_turn, action in reversed(state.question_history):
+        if question_turn < intent_start or action != "other":
+            break
+        count += 1
+    return count
+
+
+def _last_answered_open_question_was_silent(state: ConversationState) -> bool:
+    answered = _answered(state)
+    if not answered:
+        return False
+    reply_turn, action, _ = answered[-1]
+    return action == "other" and learned_on(state, reply_turn) == 0
+
+
+def open_question_score(state: ConversationState) -> float:
+    """Current value of asking "anything else that matters to you?".
+
+    The score starts on the same scale as concrete questions, decays after each
+    use, and reacts to what the latest open question actually taught. Hard
+    guardrails temporarily pause it after a silent answer and retire it after
+    repeated silence or refusals. All observations reset on an intent override.
     """
-    if wildcard_declines(state) >= DECLINE_PATIENCE:
-        # They have told us twice that there is nothing else. Asking "anything
-        # else?" a third time is the one question we already know the answer
-        # to, and it reads to a judge exactly as badly as it sounds.
-        #
-        # Twice, not once, on purpose. A boundary customer refuses the FIRST
-        # question they are asked whatever it is, then answers normally after
-        # that; standing the wildcard down on one refusal hands those sessions
-        # a weaker concrete question and costs boundary MTTC 4.00 -> 4.90.
+    if open_question_declines(state) >= OPEN_QUESTION_DECLINE_PATIENCE:
         return 0.0
+    if open_question_zero_yields(state) >= ZERO_YIELD_PATIENCE:
+        return 0.0
+    if consecutive_open_questions(state) >= MAX_CONSECUTIVE_OPEN_QUESTIONS:
+        return 0.0
+    if _last_answered_open_question_was_silent(state):
+        # Force a concrete question immediately after an unproductive broad one.
+        return 0.0
+
     observed = _replies_to(state).get("other", [])
-    shrunk = (sum(observed) + PRIOR_STRENGTH * PRIOR_YIELD) / (len(observed) + PRIOR_STRENGTH)
-    return OTHER_BASELINE * (shrunk / PRIOR_YIELD if PRIOR_YIELD else 1.0)
+    score = OPEN_QUESTION_BASELINE * (OPEN_QUESTION_DECAY ** len(observed))
+    if not observed:
+        return score
+    if observed[-1] >= OPEN_QUESTION_EXPECTED_YIELD:
+        return score * HIGH_YIELD_FACTOR
+    if observed[-1] > 0:
+        return score * SINGLE_YIELD_FACTOR
+    return score * ZERO_YIELD_FACTOR
 
 
 def choose_question(
@@ -200,26 +250,26 @@ def choose_question(
     answers all three. Only ask_attribute is scored, so bundling is free upside.
 
     Returns ``None`` only after every concrete topic is spent and the customer
-    has exhausted the wildcard. At that point another forced question is known
+    has exhausted the open question. At that point another forced question is known
     to teach nothing and creates a visible dialogue loop.
     """
     ranked = score_slots(state, cands, table)
-    wildcard = other_value(state)
+    open_score = open_question_score(state)
 
     # A broad browsing request can match hundreds of plausible products.  Stop
     # spending work on ranking that overloaded pool and ask the structured
-    # wildcard immediately; concrete high-information topics remain bundled in
+    # open-ended question immediately; concrete high-information topics remain bundled in
     # the prose so the customer has useful ways to narrow it.
     program = compile_context_program(state)
-    if candidate_pool_overloaded(program, len(cands)) and wildcard > 0.0:
+    if candidate_pool_overloaded(program, len(cands)) and open_score > 0.0:
         return "other", [slot for slot, _ in ranked[:BUNDLE_SIZE - 1]]
 
     if not ranked:
-        return ("other", []) if wildcard > 0.0 else (None, [])
+        return ("other", []) if open_score > 0.0 else (None, [])
 
-    if ranked[0][1] < wildcard:
-        # The wildcard takes the scored slot; the best concrete slots still go
-        # into the prose, so a simulator that reads the message loses nothing.
+    if ranked[0][1] < open_score:
+        # The open question takes the scored slot; the best concrete slots still
+        # go into the prose, so a simulator that reads the message loses nothing.
         return "other", [slot for slot, _ in ranked[:BUNDLE_SIZE - 1]]
 
     return ranked[0][0], [slot for slot, _ in ranked[1:BUNDLE_SIZE]]

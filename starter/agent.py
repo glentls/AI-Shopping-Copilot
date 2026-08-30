@@ -24,7 +24,7 @@ from src.attributes import load_attribute_table
 from src.contracts import ASK_ATTRIBUTES, ConversationState
 from src.policy.message import compose_message
 from src.policy.question import choose_question
-from src.policy.state import update
+from src.policy.state import record_question, update
 from src.retrieval import Retriever
 
 ARTIFACTS_DIR = os.environ.get("TECHJAM_ARTIFACTS", "artifacts")
@@ -110,9 +110,7 @@ class Agent:
         if ask_attribute not in ASK_ATTRIBUTES:
             ask_attribute = "other" if ask_attribute else None
         if ask_attribute:
-            state.asked.append(ask_attribute)
-            state.question_history.append((turn, ask_attribute))
-            state.last_asked = ask_attribute
+            record_question(state, turn, ask_attribute, extra_topics)
 
         message = compose_message(
             state, eligible_candidates, ask_attribute, extra_topics

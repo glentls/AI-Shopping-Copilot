@@ -149,6 +149,26 @@ def update(state: ConversationState, user_message: str, turn: int) -> Conversati
     return state
 
 
+def record_question(
+    state: ConversationState,
+    turn: int,
+    ask_attribute: str,
+    extra_topics: list[str] | None = None,
+) -> None:
+    """Record both the scored action and every concrete topic shown in prose.
+
+    ``question_history`` keeps only the API action because the next customer
+    reply is attributed to that action. ``asked`` is the set-like eligibility
+    view, so it also records bundled topics and prevents the prose from asking
+    about brand, material, or another topic again later.
+    """
+    for topic in [ask_attribute, *(extra_topics or [])]:
+        if topic not in state.asked:
+            state.asked.append(topic)
+    state.question_history.append((turn, ask_attribute))
+    state.last_asked = ask_attribute
+
+
 def learned_on(state: ConversationState, turn: int) -> int:
     """How many facts the message on `turn` taught us.
 

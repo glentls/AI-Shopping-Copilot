@@ -14,7 +14,7 @@ BM25, cosine, and exact-phrase raw scores are never added together. BM25 and den
 
 Explicit Buying requirements use a guarded top-K lock: complete catalog-backed matches move first only when at least ten exist. Sparse or noisy metadata activates a recall-safe backoff, so no product is removed from the candidate set. Retracted, negative, inferred, and exploratory preferences remain soft. Query construction drops no-preference/filler replies and scrubs retracted values from BM25, semantic, and exact-phrase evidence. Mixed replies are cleaned clause by clause: for example, `No brand requirement, but I would like a zipper` retains the zipper evidence. A broad override removes the replaceable preference clause from the opener while retaining constraints learned on later pre-override turns. Popularity and profile affinity break residual ties. Every candidate records scorer components and a short `why` clause.
 
-When a Browsing request has no concrete detail, fusion stops at 200 candidates and the policy immediately asks its structured wildcard clarification while bundling the highest-information concrete topics. The evaluator still receives ten recommendations, preserving the required contract while avoiding deeper ranking work on an under-specified pool.
+When a Browsing request has no concrete detail, fusion stops at 200 candidates and the policy immediately asks an open-ended clarification while bundling the highest-information concrete topics. The evaluator still receives ten recommendations, preserving the required contract while avoiding deeper ranking work on an under-specified pool.
 
 ## Build and artifacts
 

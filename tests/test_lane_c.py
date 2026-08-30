@@ -18,13 +18,18 @@ from src.attributes import AttributeTable
 from src.contracts import Candidate, ConversationState
 from src.policy.message import compose_message
 from src.policy.question import (
-    DECLINE_PATIENCE,
+    MAX_CONSECUTIVE_OPEN_QUESTIONS,
+    OPEN_QUESTION_BASELINE,
+    OPEN_QUESTION_DECLINE_PATIENCE,
+    ZERO_YIELD_PATIENCE,
     choose_question,
-    other_value,
+    consecutive_open_questions,
+    open_question_declines,
+    open_question_score,
+    open_question_zero_yields,
     score_slots,
-    wildcard_declines,
 )
-from src.policy.state import learned_on, update
+from src.policy.state import learned_on, record_question, update
 
 
 def make_state(**kwargs) -> ConversationState:
@@ -43,13 +48,17 @@ def make_candidates(n: int = 20) -> list[Candidate]:
     return [Candidate(parent_asin=f"A{i:03}", score=float(-i)) for i in range(n)]
 
 
-def say(state: ConversationState, message: str, turn: int, asked: str | None = None) -> None:
+def say(
+    state: ConversationState,
+    message: str,
+    turn: int,
+    asked: str | None = None,
+    extras: list[str] | None = None,
+) -> None:
     """One turn, in the order starter/agent.py runs it: update, then record."""
     update(state, message, turn)
     if asked:
-        state.asked.append(asked)
-        state.question_history.append((turn, asked))
-        state.last_asked = asked
+        record_question(state, turn, asked, extras)
 
 
 TABLE = make_table({
@@ -237,44 +246,102 @@ class TestQuestionChoice(unittest.TestCase):
         self.assertNotIn(attribute, extras)
 
 
-class TestWildcardPricing(unittest.TestCase):
-    def test_wildcard_leads_on_a_fresh_session(self):
+class TestOpenQuestionPricing(unittest.TestCase):
+    def test_open_question_leads_on_a_fresh_session(self):
         state = make_state(turn=1)
         attribute, _ = choose_question(state, make_candidates(), TABLE)
         self.assertEqual(attribute, "other")
 
-    def test_yield_falls_when_the_wildcard_stops_paying(self):
+    def test_initial_score_uses_the_configured_baseline(self):
+        self.assertEqual(open_question_score(make_state()), OPEN_QUESTION_BASELINE)
+
+    def test_productive_answer_is_worth_more_than_a_silent_answer(self):
         productive = make_state()
         say(productive, "I need boots", 1, asked="other")
-        say(productive, "cotton and waterproof", 2, asked="other")
+        say(productive, "cotton and waterproof", 2)
 
         silent = make_state()
         say(silent, "I need boots", 1, asked="other")
-        say(silent, "nothing more to add", 2, asked="other")
-        say(silent, "nothing more to add", 3, asked="other")
+        say(silent, "nothing more to add", 2)
 
-        self.assertGreater(other_value(productive), other_value(silent))
+        self.assertGreater(open_question_score(productive), open_question_score(silent))
 
-    def test_one_refusal_does_not_stand_the_wildcard_down(self):
-        """A boundary customer refuses whatever we ask first, then answers
-        normally. Giving up on one refusal costs boundary MTTC 4.00 -> 4.90."""
+    def test_silent_answer_forces_a_concrete_question_next(self):
         state = make_state()
-        say(state, "I'm looking for boots, but I'm still exploring.", 1, asked="other")
-        say(state, "I don't have a preference for other; please use your judgment.", 2)
-        self.assertEqual(wildcard_declines(state), 1)
-        self.assertGreater(other_value(state), 0.0)
+        say(state, "I need boots", 1, asked="other")
+        say(state, "Show me more options", 2)
 
-    def test_repeated_refusals_stand_the_wildcard_down(self):
-        state = make_state()
-        say(state, "I'm looking for boots", 1, asked="other")
-        for turn in range(2, 2 + DECLINE_PATIENCE):
-            say(state, "I don't have an additional preference for other.", turn, asked="other")
-        self.assertGreaterEqual(wildcard_declines(state), DECLINE_PATIENCE)
-        self.assertEqual(other_value(state), 0.0)
+        self.assertEqual(open_question_zero_yields(state), 1)
+        self.assertEqual(open_question_score(state), 0.0)
         attribute, _ = choose_question(state, make_candidates(), TABLE)
         self.assertNotEqual(attribute, "other")
 
-    def test_broad_pool_does_not_revive_a_retired_wildcard(self):
+    def test_open_question_can_recover_after_a_concrete_question(self):
+        state = make_state()
+        say(state, "I need boots", 1, asked="other")
+        say(state, "Show me more options", 2, asked="brand")
+        self.assertEqual(open_question_score(state), 0.0)
+
+        say(state, "No brand preference", 3)
+        self.assertGreater(open_question_score(state), 0.0)
+
+    def test_consecutive_limit_forces_a_concrete_question(self):
+        state = make_state()
+        say(state, "I need boots", 1, asked="other")
+        say(state, "cotton and waterproof", 2, asked="other")
+        say(state, "blue and comfortable", 3)
+
+        self.assertEqual(
+            consecutive_open_questions(state),
+            MAX_CONSECUTIVE_OPEN_QUESTIONS,
+        )
+        self.assertEqual(open_question_score(state), 0.0)
+        attribute, _ = choose_question(state, make_candidates(), TABLE)
+        self.assertNotEqual(attribute, "other")
+
+    def test_one_refusal_pauses_but_does_not_retire_open_questions(self):
+        """A boundary customer refuses whatever we ask first, then answers
+        normally, so one refusal should only force a concrete question."""
+        state = make_state()
+        say(state, "I'm looking for boots, but I'm still exploring.", 1, asked="other")
+        say(
+            state,
+            "I don't have a preference for other; please use your judgment.",
+            2,
+            asked="brand",
+        )
+        self.assertEqual(open_question_declines(state), 1)
+        self.assertEqual(open_question_score(state), 0.0)
+
+        say(state, "No brand preference", 3)
+        self.assertGreater(open_question_score(state), 0.0)
+
+    def test_repeated_refusals_retire_open_questions(self):
+        state = make_state()
+        say(state, "I'm looking for boots", 1, asked="other")
+        for turn in range(2, 2 + OPEN_QUESTION_DECLINE_PATIENCE):
+            next_question = "brand" if turn == 2 else "other"
+            say(
+                state,
+                "I don't have an additional preference for other.",
+                turn,
+                asked=next_question,
+            )
+        say(
+            state,
+            "I don't have an additional preference for other.",
+            2 + OPEN_QUESTION_DECLINE_PATIENCE,
+        )
+        self.assertGreaterEqual(
+            open_question_declines(state),
+            OPEN_QUESTION_DECLINE_PATIENCE,
+        )
+        self.assertEqual(open_question_score(state), 0.0)
+
+        attribute, _ = choose_question(state, make_candidates(), TABLE)
+        self.assertNotEqual(attribute, "other")
+
+    def test_broad_pool_does_not_revive_retired_open_questions(self):
         state = make_state()
         say(state, "I'm still exploring.", 1, asked="other")
         say(
@@ -289,26 +356,51 @@ class TestWildcardPricing(unittest.TestCase):
 
         self.assertNotEqual(asked, "other")
 
-    def test_interleaved_refusals_still_stand_the_wildcard_down(self):
+    def test_interleaved_refusals_still_retire_open_questions(self):
         state = make_state()
         say(state, "I'm looking for boots", 1, asked="other")
         say(state, "I don't have an additional preference for other.", 2, asked="brand")
         say(state, "I don't have a preference for brand.", 3, asked="other")
         say(state, "I don't have an additional preference for other.", 4)
 
-        self.assertEqual(wildcard_declines(state), 2)
-        self.assertEqual(other_value(state), 0.0)
+        self.assertEqual(open_question_declines(state), 2)
+        self.assertEqual(open_question_score(state), 0.0)
 
-    def test_override_reopens_the_wildcard_for_the_new_intent(self):
+    def test_repeated_zero_yields_retire_open_questions(self):
+        state = make_state()
+        say(state, "I'm looking for boots", 1, asked="other")
+        say(state, "Show me more", 2, asked="brand")
+        say(state, "No brand in mind", 3, asked="other")
+        say(state, "Keep looking", 4)
+
+        self.assertGreaterEqual(open_question_zero_yields(state), ZERO_YIELD_PATIENCE)
+        self.assertEqual(open_question_score(state), 0.0)
+
+    def test_override_reopens_questions_for_the_new_intent(self):
         state = make_state()
         say(state, "I'm looking for boots", 1, asked="other")
         say(state, "I don't have an additional preference for other.", 2, asked="other")
         say(state, "I don't have an additional preference for other.", 3)
-        self.assertEqual(other_value(state), 0.0)
+        self.assertEqual(open_question_score(state), 0.0)
 
         say(state, "Actually, ignore my earlier preference. I need cotton.", 4)
-        self.assertEqual(wildcard_declines(state), 0)
-        self.assertGreater(other_value(state), 0.0)
+        self.assertEqual(open_question_declines(state), 0)
+        self.assertEqual(open_question_zero_yields(state), 0)
+        self.assertEqual(open_question_score(state), OPEN_QUESTION_BASELINE)
+
+
+class TestQuestionRecording(unittest.TestCase):
+    def test_bundled_topics_are_marked_as_asked(self):
+        state = make_state()
+        record_question(state, 1, "other", ["brand", "material"])
+
+        self.assertEqual(state.asked, ["other", "brand", "material"])
+        self.assertEqual(state.question_history, [(1, "other")])
+        self.assertEqual(state.last_asked, "other")
+
+        ranked = dict(score_slots(state, make_candidates(), TABLE))
+        self.assertNotIn("brand", ranked)
+        self.assertNotIn("material", ranked)
 
 
 class TestMessage(unittest.TestCase):
@@ -336,6 +428,15 @@ class TestMessage(unittest.TestCase):
         say(state, "I need boots", 1, asked="other")
         say(state, "I don't have an additional preference for other.", 2, asked="other")
         text = compose_message(state, make_candidates(), "other", [])
+        self.assertNotIn("stop asking", text)
+
+    def test_open_question_refusal_explains_switch_to_a_concrete_topic(self):
+        state = make_state()
+        say(state, "I need boots", 1, asked="other")
+        say(state, "You decide", 2)
+
+        text = compose_message(state, make_candidates(), "material", ["color"])
+        self.assertIn("something more specific", text)
         self.assertNotIn("stop asking", text)
 
     def test_exhausted_customer_gets_recommendations_without_another_question(self):

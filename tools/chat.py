@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from src.policy.question import other_value
+from src.policy.question import open_question_score
 from starter.agent import Agent
 
 BANNER = """
@@ -133,7 +133,7 @@ class Session:
         print(f"    asked        {state.asked}")
         print(f"    unanswerable {sorted(state.unanswerable)}")
         print(f"    shown in current intent {len(state.shown_recommendations)}")
-        print(f"    wildcard value {other_value(state):.2f}")
+        print(f"    open-question score {open_question_score(state):.2f}")
 
     def show_why(self) -> None:
         state = self.state

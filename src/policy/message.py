@@ -146,8 +146,8 @@ def _opening(state: ConversationState, ask_attribute: Optional[str]) -> str:
         return f"Understood — {focus} it is, and I have set the earlier preference aside."
 
     if NO_PREFERENCE_RE.search(message):
-        # They just declined a question. Say so, and make clear we will not
-        # ask it again rather than pretending we learned something.
+        # They just declined a question. Acknowledge the policy's actual next
+        # move rather than pretending we learned something.
         previous = next(
             (
                 action
@@ -162,6 +162,10 @@ def _opening(state: ConversationState, ask_attribute: Optional[str]) -> str:
             # breath is the incoherence a judge will notice first. We are about
             # to re-ask, so say that instead.
             return "Understood — let me try once more, then I will go with my best judgment."
+        if previous == "other" and ask_attribute is not None:
+            # One refusal pauses the open-ended action rather than retiring it.
+            # Do not promise never to revisit it; explain the immediate switch.
+            return "Understood — I will ask something more specific instead."
         return DECLINE_LINES[state.turn % len(DECLINE_LINES)].format(
             SHORT.get(previous, "that")
         )

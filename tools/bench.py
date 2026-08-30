@@ -8,7 +8,7 @@ it, so it needs to land on main ahead of everything else.
     python3 -m tools.bench --transcript 3      # dump any 3 sessions, hit or miss
     python3 -m tools.bench --depth             # where the target really ranks
     python3 -m tools.bench --compare a.json b.json
-    python3 -m tools.bench --sweep TJ_OTHER_BASELINE=0,2,5,20
+    python3 -m tools.bench --sweep TJ_OPEN_QUESTION_BASELINE=3,4,5 TJ_OPEN_QUESTION_DECAY=0.5,0.65,0.8
 
 The transcript/depth modes re-run the public set through a local copy of the
 evaluator's session loop (`replay`) so we can watch the dialogue. That loop is
@@ -453,7 +453,7 @@ def main() -> None:
                         help="where to write results; empty string writes nothing")
     parser.add_argument("--compare", nargs=2, metavar=("BASE", "NEW"))
     parser.add_argument("--sweep", nargs="+", metavar="VAR=v1,v2",
-                        help="grid over environment knobs, e.g. TJ_OTHER_BASELINE=0,5,20")
+                        help="grid over environment knobs, e.g. TJ_OPEN_QUESTION_BASELINE=3,4,5")
     parser.add_argument("--failures", type=int, default=0, metavar="N",
                         help="dump N failed session transcripts")
     parser.add_argument("--transcript", type=int, default=0, metavar="N",

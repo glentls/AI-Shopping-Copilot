@@ -36,7 +36,7 @@ Only `other` is scored; the two concrete topics ride along in the prose.
 > else that matters to you, a brand you like, or what you will mostly use it for?
 > `ask_attribute=other`
 
-Two constraints in one answer — the wildcard earning its keep.
+Two constraints in one answer — the open-ended question earning its keep.
 
 > **[3] Customer:** Actually, ignore my earlier preference. What I need is: Water
 > Resistant.
@@ -60,7 +60,7 @@ and `feature=[waterproof]`.
 
 ## 2. Boundary — `public_0041`
 
-Target `B09MSY8926`, LETDIOSTO Women's Plus Size Tunic Tops. **Hit on turn 3 at
+Target `B09MSY8926`, LETDIOSTO Women's Plus Size Tunic Tops. **Hit on turn 5 at
 rank 1.** The customer declines the first question outright.
 
 > **[1] Customer:** I'm looking for Tees & Blouses Tunics, but I'm still exploring.
@@ -75,27 +75,37 @@ a question with no recommendations throws away a free chance at a hit.
 
 > **[2] Customer:** I don't have a preference for other; please use your judgment.
 >
-> **Agent:** Understood — let me try once more, then I will go with my best
-> judgment. Here are ten to look at — my top pick because it matches your shirt
-> preference. Could you tell me anything else that matters to you, a brand you
-> like, or any features that matter?
+> **Agent:** Understood — I will ask something more specific instead. Here are
+> ten to look at — my top pick because it matches your shirt preference. Could
+> you tell me a material you prefer, what you will mostly use it for, or a
+> particular style or cut?
+> `ask_attribute=material`
+
+The open-ended question pauses immediately after the refusal and the policy
+switches to a concrete material question.
+
+> **[3] Customer:** For that, what matters is: polyester.
+>
+> **Agent:** Got it — polyester. Here are ten to look at — my top pick because it
+> matches your shirt preference. It would help to know a colour you lean
+> towards, the size or fit you need, or a budget you want to stay under.
+> `ask_attribute=color`
+
+> **[4] Customer:** I don't have an additional preference for color.
+>
+> **Agent:** That is fine, I will make the call on the colour. Here are ten to
+> look at — my top pick because it matches your shirt preference. Could you tell
+> me anything else that matters to you?
 > `ask_attribute=other`
 
-The refusal. The slot is marked unanswerable so it is never asked again as a
-concrete question. The agent does not promise to drop a topic and then ask it in
-the same breath — it says it is trying once more, because it is. Standing the
-wildcard down on this single refusal was measured and rejected: a boundary
-customer declines whatever they are asked first and then answers normally, and
-giving up here costs boundary MTTC 4.00 → 4.90.
-
-> **[3] Customer:** For that, what matters is: polyester; 3X women tops care:
-> Hand wash or machine wash in gentle; Hang to dry; No ironing; No shrinkage.
+> **[5] Customer:** For that, what matters is: 3X women tops care: Hand wash or
+> machine wash in gentle; Hang to dry; No ironing; No shrinkage; 进口.
 >
-> **Agent:** Got it — women, polyester, and machine washable. Here are ten to
-> look at — my top pick because it matches a specific requirement you mentioned.
-> It would help to know anything else that matters to you, a brand you like, or
-> what you will mostly use it for.
+> **Agent:** Got it — women and machine washable. Here are ten to look at — my
+> top pick because it matches a specific requirement you mentioned. It would
+> help to know anything else that matters to you.
 > `ask_attribute=other` — **target returned at rank 1**
 
-Patience paid: one more wildcard turn recovered the whole constraint set from a
-customer who had just refused, and the target lands first.
+The policy respects the first refusal, gathers the next preference with a
+specific question, and only returns to the open-ended action after intervening
+concrete questions.

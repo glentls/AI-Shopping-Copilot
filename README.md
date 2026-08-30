@@ -13,13 +13,13 @@ the full fused index:
 
 | Metric | Result |
 |---|---:|
-| TechnicalScore | **0.8599** |
-| Hit Rate@10 | **0.9950** |
-| MRR | **0.6482** |
-| MTTC | **2.600** |
+| TechnicalScore | **0.8601** |
+| Hit Rate@10 | **0.9900** |
+| MRR | **0.6618** |
+| MTTC | **2.670** |
 | Reported tokens | **0** |
 
-The remaining miss is assigned turn 11 by the evaluator. Intent-override hits
+The two remaining misses are assigned turn 11 by the evaluator. Intent-override hits
 cannot count before the override arrives on turn 3 or 4. Run the benchmark
 commands below to reproduce the aggregate and per-scenario results.
 
@@ -98,10 +98,11 @@ customer message
   requirements lock the top ten only when catalog metadata supplies ten full
   matches; otherwise the ranker backs off without dropping recall.
 - **Dialogue policy:** expected information gain scores concrete questions.
-  The `other` wildcard is valued from what it has actually yielded. Two
-  refusals retire it even when another question occurred between them, and the
-  agent stops asking once all remaining topics are exhausted. An overloaded
-  Browsing pool immediately triggers structured narrowing guidance.
+  The open-ended `other` action starts on the same scale, decays after each use,
+  pauses after an unproductive answer, and retires after repeated silence or
+  refusals. The agent stops asking once all remaining topics are exhausted. An
+  overloaded Browsing pool triggers narrowing guidance only while that action
+  remains eligible.
 - **Personalized context:** safe aggregate `preference_tags` enrich the semantic
   query and contribute a small Browsing-only rank prior among already relevant
   candidates. Live customer constraints always take precedence over profile
@@ -176,8 +177,30 @@ Non-obvious runtime variables:
 - `TJ_RETRIEVAL_MODE`: `fused` (default), `bm25`, or `dense`.
 - `TJ_BM25_WEIGHT`, `TJ_DENSE_WEIGHT`, `TJ_EXACT_WEIGHT`, `TJ_SLOT_WEIGHT`, and
   `TJ_BUDGET_WEIGHT`: ablation and tuning controls.
-- `TJ_OTHER_BASELINE`, `TJ_OTHER_PRIOR_YIELD`, `TJ_OTHER_PRIOR_STRENGTH`, and
-  `TJ_DECLINE_PATIENCE`: question-policy controls.
+- `TJ_OPEN_QUESTION_BASELINE` and `TJ_OPEN_QUESTION_DECAY`: initial value and
+  per-use discount for asking “anything else that matters?”.
+- `TJ_OPEN_QUESTION_EXPECTED_YIELD`: new facts expected from a highly
+  productive open-ended answer.
+- `TJ_OPEN_QUESTION_MAX_CONSECUTIVE`,
+  `TJ_OPEN_QUESTION_ZERO_YIELD_PATIENCE`, and
+  `TJ_OPEN_QUESTION_DECLINE_PATIENCE`: hard repetition and exhaustion limits.
+
+Question-policy settings are read from the process environment when
+`src.policy.question` is imported. Configure one run inline:
+
+```bash
+TJ_OPEN_QUESTION_BASELINE=8 TJ_OPEN_QUESTION_DECAY=0.8 python3 -m tools.chat
+```
+
+For a reusable local configuration, copy
+`config/question-policy.env.example` to the git-ignored `.env`, edit it, and
+source it before starting the agent:
+
+```bash
+cp config/question-policy.env.example .env
+source .env
+python3 -m tools.chat
+```
 
 ## Repository map
 
@@ -205,7 +228,7 @@ evaluator/local_evaluator.py  frozen public simulator and scorer
 - Most catalog products have no price; missing price is treated as unknown, not
   over budget.
 - The public simulator copies catalog constraints into replies. Real customers
-  are less structured, so wildcard priors and extraction coverage should be
+  are less structured, so open-question settings and extraction coverage should be
   re-evaluated on natural-language conversations.
 - The evaluator supplies an aggregate profile but no stable user identifier or
   write-back API. The agent can personalize and adapt within a session, but it

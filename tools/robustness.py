@@ -22,7 +22,7 @@ import sys
 
 from src.contracts import ConversationState
 from src.extract import parse_budget
-from src.policy.state import update
+from src.policy.state import record_question, update
 from src.policy.question import choose_question
 from tests.robustness_cases import CASES, DIALOGUES, SKIP, Case, Dialogue
 
@@ -79,13 +79,15 @@ def evaluate_dialogue(dialogue: Dialogue, table=None) -> list[str]:
             except Exception as error:
                 return [f"turn {turn} choose_question RAISED {type(error).__name__}: {error}"]
             if attribute is None:
-                problems.append(f"turn {turn} asked nothing (a wasted turn)")
-            elif attribute != "other" and attribute in state.asked:
+                # The policy deliberately stops asking once every concrete
+                # topic has appeared and the open-ended action is exhausted.
+                # Recommendations still make this a useful customer turn.
+                continue
+            if attribute != "other" and attribute in state.asked:
                 problems.append(f"turn {turn} re-asked {attribute!r}")
             elif attribute in state.unanswerable and attribute != "other":
                 problems.append(f"turn {turn} asked {attribute!r} after it was declined")
-            state.asked.append(attribute)
-            state.last_asked = attribute
+            record_question(state, turn, attribute, extras)
 
     for slot, value in dialogue.expect:
         if value not in state.active(slot):

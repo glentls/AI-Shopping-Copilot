@@ -14,13 +14,13 @@ python3 -m tools.bench --verify   # replay loop still matches the evaluator
 
 | | score | hit@10 | MRR | MTTC | mean turns to first hit |
 |---|---|---|---|---|---|
-| **overall** | **0.8541** | 0.985 | 0.651 | 2.68 | **2.55** |
-| buying (80) | 0.8492 | 0.975 | 0.630 | 2.36 | 2.14 |
-| browsing (80) | 0.8742 | 1.000 | 0.672 | 2.38 | 2.38 |
-| intent_override (30) | 0.8101 | 0.967 | 0.636 | 4.20 | 3.97 |
-| boundary (10) | 0.8638 | 1.000 | 0.686 | 3.10 | 3.10 |
+| **overall** | **0.8601** | 0.990 | 0.662 | 2.67 | **2.59** |
+| buying (80) | 0.8690 | 0.988 | 0.667 | 2.24 | 2.13 |
+| browsing (80) | 0.8607 | 0.988 | 0.652 | 2.44 | 2.33 |
+| intent_override (30) | 0.8314 | 1.000 | 0.649 | 4.17 | 4.17 |
+| boundary (10) | 0.8712 | 1.000 | 0.738 | 3.50 | 3.50 |
 
-Baseline on entry was 0.7483. Only 3 sessions now miss. Recommendation selection
+Baseline on entry was 0.7483. Only 2 sessions now miss. Recommendation selection
 uses every continued turn as implicit negative feedback: products already shown
 under the current intent are filtered out before the next top ten is selected.
 An explicit intent override clears that history because pre-override products
@@ -54,48 +54,60 @@ API scores one attribute, but the organizers' worked example asks three things
 in one breath and the customer answers all three, so bundling is free upside and
 turn count is 20% of the score.
 
-**The wildcard.** `other` is an action, not a slot, and competes on the same
-scale. It yields whatever the customer still has; a concrete slot yields only if
-they happen to hold a preference of that type. It dominates on this simulator:
-pricing it at 0 — i.e. always picking the highest-entropy concrete slot —
-scores 0.6900 against 0.7474. Almost all of that is speed, not reach: hit rate
-only moves 0.865 → 0.840, but MTTC blows out from 3.52 to 6.11. Information you
-reliably GET beats information that would be worth more if you got it.
+**The open-ended question.** `other` is the evaluator's action name for asking
+“anything else that matters?”. It is not a wildcard slot. It can yield a
+preference of any type, while a concrete action yields only if the customer has
+a preference for that topic.
 
-It is now priced by what it has actually returned *this session* rather than by
-a fixed constant:
+The old policy started `other` at 20 while concrete questions were capped near
+5. It therefore kept winning after many unproductive natural-language turns.
+That value came from a public-simulator sweep:
 
-```
-shrunk = (sum(observed yields) + 2 * PRIOR_YIELD) / (n + 2)
-value  = OTHER_BASELINE * shrunk / PRIOR_YIELD
-```
-
-`OTHER_BASELINE` is the prior, not the verdict. This matters because the
-constant is fitted to a simulator that answers "anything else?" with two
-verbatim catalog strings, and a real customer will not. When the wildcard stops
-paying, the estimate falls and concrete slots take the turn — with nobody
-re-tuning anything. On the public set the change is score-neutral (every turn
-after exhaustion is dead anyway), so the robustness is free.
-
-Sweeping the prior on the public set:
-
-| `TJ_OTHER_BASELINE` | 0 | 1 | 3 | 8 | 20 |
+| old open-question baseline | 0 | 1 | 3 | 8 | 20 |
 |---|---|---|---|---|---|
 | score | 0.6900 | 0.7156 | 0.7330 | 0.7473 | 0.7474 |
 | MTTC | 6.11 | 5.71 | 4.50 | 3.52 | 3.52 |
 
-It saturates because `classify_constraint` in the evaluator only ever routes
-answers to budget, material, color, size, style, use_case and feature — asking
-`brand` or `category` here is a guaranteed dead turn. **Re-measure this the
-moment customer messages become natural language.**
+The simulator reliably returns up to two catalog-like constraints for `other`,
+so 8 and 20 score almost identically. Natural customers do not behave that way,
+and the extra 12 points only make the question dominate the conversation.
 
-**Two refusals, not one, stand the wildcard down.** They are counted across the
-current intent even if a concrete question intervenes; an override starts a new
-count. A boundary customer refuses whatever they are asked first and then
-answers normally. Giving up after a single refusal was implemented, measured,
-and reverted: boundary MTTC 4.00 → 4.90. `TJ_DECLINE_PATIENCE` controls it. Once
-the wildcard and every concrete slot are exhausted, `ask_attribute` becomes
-`null` instead of forcing the same known-dead question again.
+The current policy puts `other` on the same scale as concrete questions and
+applies explicit diminishing returns:
+
+```
+score = OPEN_QUESTION_BASELINE * OPEN_QUESTION_DECAY ** answered_open_questions
+score *= 1.25 when the latest answer yields at least two new facts
+score *= 0.90 when it yields one new fact
+score *= 0.35 when it yields none
+```
+
+The defaults are a baseline of 8 and decay of 0.8. Hard guardrails prevent a
+benchmark-tuned score from creating a visible loop:
+
+- At most two consecutive open-ended questions.
+- A zero-yield reply forces a concrete question next.
+- Two zero-yield replies or explicit refusals retire `other` for this intent.
+- An intent override resets the derived counts.
+- Concrete topics bundled into the prose are marked as asked, so they do not
+  reappear later.
+
+The defaults were selected from a 4×3 public-set sweep on the latest merged
+retrieval and orchestration code. Against untouched main on the same artifacts,
+the new policy improves MRR and boundary handling, while losing one browsing
+hit and paying 0.055 turns of MTTC for the conversational guardrails:
+
+| policy | score | hit@10 | MRR | MTTC |
+|---|---:|---:|---:|---:|
+| untouched main | 0.8623 | 0.995 | 0.6569 | 2.615 |
+| baseline 8, decay 0.8 | 0.8601 | 0.990 | 0.6618 | 2.670 |
+
+The controls are `TJ_OPEN_QUESTION_BASELINE`, `TJ_OPEN_QUESTION_DECAY`,
+`TJ_OPEN_QUESTION_EXPECTED_YIELD`, `TJ_OPEN_QUESTION_MAX_CONSECUTIVE`,
+`TJ_OPEN_QUESTION_ZERO_YIELD_PATIENCE`, and
+`TJ_OPEN_QUESTION_DECLINE_PATIENCE`. Once the open question and every concrete
+slot are exhausted, `ask_attribute` becomes `null` instead of forcing another
+known-dead question.
 
 ## Overrides and boundaries
 
@@ -190,7 +202,7 @@ python3 -m tools.bench --only public_0003        # one session
 python3 -m tools.bench --scenario boundary --transcript 3
 python3 -m tools.bench --depth                   # is the target retrieved at all?
 python3 -m tools.bench --compare base.json new.json
-python3 -m tools.bench --sweep TJ_SLOT_WEIGHT=1,3,5 TJ_OTHER_BASELINE=8,20
+python3 -m tools.bench --sweep TJ_OPEN_QUESTION_BASELINE=3,4,5 TJ_OPEN_QUESTION_DECAY=0.5,0.65,0.8
 ```
 
 `--compare` names the sessions whose outcome moved, which is usually more
