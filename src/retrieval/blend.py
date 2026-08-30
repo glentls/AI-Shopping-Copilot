@@ -33,6 +33,7 @@ def reciprocal_rank_fusion(
     top_n: int,
     dense_weight: float = 0.10,
     exact_phrase_mode: bool = False,
+    profile_weight: float = 0.0,
 ) -> list[Candidate]:
     """Fuse incomparable scorer outputs by rank, never by raw magnitude."""
     weights = {
@@ -62,6 +63,19 @@ def reciprocal_rank_fusion(
             candidate.components[f"{component}_raw"] = float(hit.score)
             candidate.score += contribution
 
+    # Profile tags are a personalized context route, but never a catalog-wide
+    # recall route: they may reorder candidates already retrieved for the live
+    # request, not inject unrelated products or override explicit constraints.
+    effective_profile_weight = _env_float("TJ_PROFILE_WEIGHT", profile_weight)
+    if effective_profile_weight > 0.0:
+        for asin, rank in profile_ranks.items():
+            candidate = candidates.get(asin)
+            if candidate is None or rank <= 0:
+                continue
+            contribution = effective_profile_weight / (RRF_K + rank)
+            candidate.components["profile_rrf"] = contribution
+            candidate.score += contribution
+
     # No route may produce an empty/short recommendation list. Popular items
     # are weak lottery tickets, but still better than unused slots.
     for asin in fallback:
@@ -86,6 +100,48 @@ def reciprocal_rank_fusion(
         reverse=True,
     )
     return ranked[:top_n]
+
+
+def lock_hard_constraints(
+    candidates: list[Candidate],
+    constraints: Sequence[tuple[str, Sequence[str]]],
+    table,
+    min_results: int = 10,
+) -> list[Candidate]:
+    """Put catalog-backed Buying matches first, with a recall-safe backoff.
+
+    A constraint is OR within one slot and AND across slots.  The lock is only
+    activated when enough complete matches exist to fill the evaluator's top
+    K; sparse or noisy catalog metadata therefore cannot empty the result set.
+    """
+    normalized = [
+        (slot, {value for value in values if value})
+        for slot, values in constraints
+        if values
+    ]
+    if not normalized or not candidates:
+        return candidates
+
+    complete: list[Candidate] = []
+    remainder: list[Candidate] = []
+    for candidate in candidates:
+        matched = 0
+        for slot, wanted in normalized:
+            held = set(table.values(candidate.parent_asin, slot))
+            if held & wanted:
+                matched += 1
+        candidate.components["hard_match_ratio"] = matched / len(normalized)
+        (complete if matched == len(normalized) else remainder).append(candidate)
+
+    required = min(max(1, min_results), len(candidates))
+    if len(complete) < required:
+        for candidate in candidates:
+            candidate.components["hard_filter_backoff"] = 1.0
+        return candidates
+
+    for candidate in complete:
+        candidate.components["hard_filter"] = 1.0
+    return complete + remainder
 
 
 def rerank_candidates(

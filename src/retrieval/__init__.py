@@ -11,8 +11,9 @@ from src.attributes import AttributeTable
 from src.contracts import SLOTS, Candidate, ConversationState
 from src.extract import replaces_earlier_preference
 from src.lexicons import NO_PREFERENCE_RE
+from src.orchestration import compile_context_program
 
-from .blend import reciprocal_rank_fusion, rerank_candidates
+from .blend import lock_hard_constraints, reciprocal_rank_fusion, rerank_candidates
 from .bm25 import ARTIFACT_NAME as BM25_ARTIFACT, BM25Index, build_bm25_index
 from .dense import DenseIndex
 
@@ -134,6 +135,7 @@ class Retriever:
 
     def _semantic_query_text(self, state: ConversationState) -> str:
         """Current intent only, suitable for semantic retrieval."""
+        program = compile_context_program(state)
         messages = self._intent_messages(state)
         said = " ".join(messages)
         said = self._without_excluded(said, state)
@@ -143,7 +145,12 @@ class Retriever:
             for value in state.slots.get(slot, [])
             if value.polarity and slot != "budget"
         )
-        return " ".join(f"{said} {live_values}".split())
+        profile_context = (
+            "preferences: " + " ".join(program.profile_terms)
+            if program.route == "browsing" and program.profile_terms
+            else ""
+        )
+        return " ".join(f"{said} {live_values} {profile_context}".split())
 
     def _query_text(self, state: ConversationState) -> str:
         """Current lexical evidence plus live slots, with stale values scrubbed."""
@@ -171,6 +178,7 @@ class Retriever:
         return phrases
 
     def search(self, state: ConversationState, top_n: int = 300) -> list[Candidate]:
+        program = compile_context_program(state)
         top_n = max(10, min(int(top_n), len(self.metadata))) if self.metadata else 0
         if top_n <= 0:
             return []
@@ -178,14 +186,6 @@ class Retriever:
         semantic_query = self._semantic_query_text(state)
         route_limit = max(300, top_n)
         exact_phrases = self._exact_phrases(state)
-        informative_messages = [
-            text.lower() for role, text in state.history
-            if role == "customer" and self._informative(text)
-        ]
-        generic_browsing = bool(informative_messages) and all(
-            "still exploring" in text for text in informative_messages
-        )
-
         dense_future = (
             self._route_executor.submit(self.dense.search, semantic_query, route_limit)
             if self._route_executor is not None
@@ -214,6 +214,7 @@ class Retriever:
         if tag_key not in self._profile_cache:
             self._profile_cache[tag_key] = self.bm25.profile_ranks(tag_key)
         profile_ranks = self._profile_cache[tag_key]
+        fusion_limit = min(top_n, program.candidate_cutoff)
         return reciprocal_rank_fusion(
             bm25_hits,
             stemmed_hits,
@@ -222,21 +223,26 @@ class Retriever:
             profile_ranks,
             self.metadata,
             self.fallback,
-            top_n,
+            fusion_limit,
             # Natural requests need dense-only candidates to clear the BM25
             # pool. Verbatim catalog clauses are already high-confidence
             # lexical evidence, so they do not need a semantic contribution.
             # Generic browsing remains a light semantic hedge.
-            dense_weight=(
-                0.0 if exact_phrases else (0.10 if generic_browsing else 1.0)
-            ),
+            dense_weight=0.0 if exact_phrases else program.dense_weight,
             # Verbatim requirement clauses already provide strong exact
             # lexical evidence, so morphology is a smaller hedge there.
             exact_phrase_mode=bool(exact_phrases),
+            profile_weight=program.profile_weight,
         )
 
     def rerank(self, cands: list[Candidate], state: ConversationState) -> list[Candidate]:
-        return rerank_candidates(cands, state, self.table, self.metadata)
+        ranked = rerank_candidates(cands, state, self.table, self.metadata)
+        program = compile_context_program(state)
+        if program.lock_hard_constraints and program.hard_constraints:
+            ranked = lock_hard_constraints(
+                ranked, program.hard_constraints, self.table
+            )
+        return ranked
 
 
 __all__ = ["Retriever"]

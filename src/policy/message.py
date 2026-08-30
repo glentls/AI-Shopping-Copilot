@@ -22,6 +22,7 @@ from typing import Optional
 from src.contracts import Candidate, ConversationState
 from src.extract import detect_override, extract_slots
 from src.lexicons import NO_PREFERENCE_RE
+from src.orchestration import candidate_pool_overloaded, compile_context_program
 from src.policy.state import learned_on
 
 # The noun phrase that follows "could you tell me ...".
@@ -193,6 +194,12 @@ def _recommend(state: ConversationState, cands: list[Candidate]) -> str:
     if not cands:
         return ""
     why = (cands[0].why or "").strip().rstrip(".")
+    if candidate_pool_overloaded(compile_context_program(state), len(cands)):
+        reason = f"; the first {why}" if why else ""
+        return (
+            "Your brief still matches a wide part of the catalog, so these "
+            f"are exploratory options while we narrow it down{reason}."
+        )
     if why:
         return f"Here are ten to look at — my top pick because {why}."
     return LEAD_LINES[state.turn % len(LEAD_LINES)]

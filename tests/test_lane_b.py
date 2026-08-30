@@ -220,6 +220,25 @@ class RetrieverTest(unittest.TestCase):
 
         self.assertIn("leather", self.retriever._query_text(state).lower())
 
+    def test_profile_context_only_enriches_browsing_semantics(self) -> None:
+        browsing = ConversationState(
+            "browse", {"preference_tags": ["comfort", "fit"]}
+        )
+        browsing.history.append(("customer", "I'm still exploring."))
+        buying = ConversationState(
+            "buy", {"preference_tags": ["comfort", "fit"]}
+        )
+        buying.history.append(("customer", "I need leather shoes."))
+        buying.add("material", SlotValue("leather", 0.95, 1))
+
+        self.assertIn(
+            "preferences: comfort fit",
+            self.retriever._semantic_query_text(browsing),
+        )
+        self.assertNotIn(
+            "preferences:", self.retriever._semantic_query_text(buying)
+        )
+
     def test_search_stays_within_turn_budget(self) -> None:
         state = ConversationState("session", {"preference_tags": ["comfort"]})
         state.history.append(("customer", "comfortable walking shoes for a long trip"))

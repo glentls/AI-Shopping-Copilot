@@ -30,6 +30,7 @@ from src.attributes import AttributeTable
 from src.contracts import Candidate, ConversationState
 from src.extract import detect_override
 from src.lexicons import NO_PREFERENCE_RE
+from src.orchestration import candidate_pool_overloaded, compile_context_program
 from src.policy.state import learned_on
 
 # Prior value per slot, from the measured halvings above. Used to break ties
@@ -204,6 +205,14 @@ def choose_question(
     """
     ranked = score_slots(state, cands, table)
     wildcard = other_value(state)
+
+    # A broad browsing request can match hundreds of plausible products.  Stop
+    # spending work on ranking that overloaded pool and ask the structured
+    # wildcard immediately; concrete high-information topics remain bundled in
+    # the prose so the customer has useful ways to narrow it.
+    program = compile_context_program(state)
+    if candidate_pool_overloaded(program, len(cands)) and wildcard > 0.0:
+        return "other", [slot for slot, _ in ranked[:BUNDLE_SIZE - 1]]
 
     if not ranked:
         return ("other", []) if wildcard > 0.0 else (None, [])

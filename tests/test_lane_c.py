@@ -271,9 +271,23 @@ class TestWildcardPricing(unittest.TestCase):
             say(state, "I don't have an additional preference for other.", turn, asked="other")
         self.assertGreaterEqual(wildcard_declines(state), DECLINE_PATIENCE)
         self.assertEqual(other_value(state), 0.0)
-
         attribute, _ = choose_question(state, make_candidates(), TABLE)
         self.assertNotEqual(attribute, "other")
+
+    def test_broad_pool_does_not_revive_a_retired_wildcard(self):
+        state = make_state()
+        say(state, "I'm still exploring.", 1, asked="other")
+        say(
+            state,
+            "I don't have an additional preference for other.",
+            2,
+            asked="other",
+        )
+        say(state, "I don't have an additional preference for other.", 3)
+
+        asked, _ = choose_question(state, make_candidates(120), TABLE)
+
+        self.assertNotEqual(asked, "other")
 
     def test_interleaved_refusals_still_stand_the_wildcard_down(self):
         state = make_state()
@@ -355,6 +369,17 @@ class TestMessage(unittest.TestCase):
             state = make_state()
             say(state, message, 1, asked="other")
             self.assertIsInstance(compose_message(state, [], "other", ["material"]), str)
+
+    def test_broad_candidate_pool_is_explained_as_exploratory(self):
+        state = make_state()
+        say(state, "I'm still exploring.", 1)
+
+        message = compose_message(
+            state, make_candidates(120), "other", ["style"]
+        )
+
+        self.assertIn("wide part of the catalog", message)
+        self.assertIn("narrow it down", message)
 
     def test_wording_moves_across_a_frozen_state(self):
         """Nothing new arrives after the customer dries up, so identical

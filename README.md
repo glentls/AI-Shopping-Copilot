@@ -13,13 +13,13 @@ the full fused index:
 
 | Metric | Result |
 |---|---:|
-| TechnicalScore | **0.8553** |
-| Hit Rate@10 | **0.9850** |
-| MRR | **0.6547** |
-| MTTC | **2.68** |
+| TechnicalScore | **0.8599** |
+| Hit Rate@10 | **0.9950** |
+| MRR | **0.6482** |
+| MTTC | **2.600** |
 | Reported tokens | **0** |
 
-The three misses are assigned turn 11 by the evaluator. Intent-override hits
+The remaining miss is assigned turn 11 by the evaluator. Intent-override hits
 cannot count before the override arrives on turn 3 or 4. Run the benchmark
 commands below to reproduce the aggregate and per-scenario results.
 
@@ -73,10 +73,11 @@ Each turn follows one deterministic pipeline:
 ```text
 customer message
   -> extract and update current preference state
-  -> BM25 + MiniLM dense + exact-phrase retrieval
-  -> reciprocal-rank fusion and confidence-weighted soft reranking
+  -> compile a Buying/Browsing context program from state + profile
+  -> BM25 + Porter + MiniLM dense + exact-phrase retrieval
+  -> route-aware fusion, semantic ranking, and guarded constraint locking
   -> remove products already shown under this intent
-  -> choose a clarification from the eligible candidates
+  -> cut off overloaded broad pools and choose a clarification
   -> return up to 10 ranked ASINs with an explanatory response
 ```
 
@@ -85,15 +86,26 @@ customer message
   slots. It handles canonical synonyms, clause-scoped negation, explicit
   boundaries, and budget ranges.
 - **Retrieval:** SQLite FTS5 BM25 runs concurrently with a local 384-dimensional
-  MiniLM ONNX encoder. Exact catalog clauses form a third route. Reciprocal-rank
-  fusion combines ranks rather than incomparable raw scores.
+  MiniLM ONNX encoder. Porter morphology and exact catalog clauses add two more
+  routes. Reciprocal-rank fusion combines ranks rather than incomparable raw
+  scores; MiniLM provides model-based semantic ranking without an API call.
+- **Dynamic routing:** every turn compiles a fresh context program. Explicit
+  requirements select the Buying track; exploratory category-only requests use
+  the Browsing track, a semantic/profile prior, and a 200-candidate processing
+  cutoff. Supplying a concrete detail switches the next turn to Buying.
 - **Reranking:** live constraints receive confidence-weighted bonuses; negated,
-  retracted, and over-budget evidence receives soft penalties. Constraints do
-  not hard-delete products.
+  retracted, and over-budget evidence receives soft penalties. Explicit Buying
+  requirements lock the top ten only when catalog metadata supplies ten full
+  matches; otherwise the ranker backs off without dropping recall.
 - **Dialogue policy:** expected information gain scores concrete questions.
   The `other` wildcard is valued from what it has actually yielded. Two
   refusals retire it even when another question occurred between them, and the
-  agent stops asking once all remaining topics are exhausted.
+  agent stops asking once all remaining topics are exhausted. An overloaded
+  Browsing pool immediately triggers structured narrowing guidance.
+- **Personalized context:** safe aggregate `preference_tags` enrich the semantic
+  query and contribute a small Browsing-only rank prior among already relevant
+  candidates. Live customer constraints always take precedence over profile
+  history.
 - **Intent handling:** “ignore my earlier preference” retires the replaceable
   opener preference even when the new value belongs to another slot, while
   preserving the category and valid constraints learned later. An override
@@ -174,6 +186,7 @@ starter/agent.py              evaluator entry point and turn orchestration
 src/extract.py                customer constraint extraction
 src/attributes.py             catalog attribute table
 src/retrieval/                BM25, MiniLM dense retrieval, fusion, reranking
+src/orchestration.py          intent routing and turn-scoped context programs
 src/policy/                   state transitions, question policy, response text
 tools/build_index.py          reproducible artifact builder
 tools/bench.py                metrics, replay, transcripts, sweeps, verification
@@ -194,6 +207,10 @@ evaluator/local_evaluator.py  frozen public simulator and scorer
 - The public simulator copies catalog constraints into replies. Real customers
   are less structured, so wildcard priors and extraction coverage should be
   re-evaluated on natural-language conversations.
+- The evaluator supplies an aggregate profile but no stable user identifier or
+  write-back API. The agent can personalize and adapt within a session, but it
+  deliberately does not invent cross-session identity or durable profile
+  mutations.
 - Full fused setup needs a one-time model/runtime download and roughly 484 MiB
   of generated artifacts in the current development environment.
 
