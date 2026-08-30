@@ -23,6 +23,26 @@ class BuildAskMessageTest(unittest.TestCase):
     def test_no_context_returns_generic_default(self) -> None:
         self.assertTrue(build_ask_message(None))
 
+    def test_never_bundles_multiple_attribute_names_in_one_question(self) -> None:
+        # One thing asked per turn, always -- never "color, size, material,
+        # or budget?" in a single sentence, whether via a specific topic or
+        # any situational fallback branch.
+        keywords = ("color", "material", "size", "style", "brand", "budget")
+        contexts = [
+            _ctx(scenario="intent_override"),
+            _ctx(scenario="boundary"),
+            _ctx(scenario="browsing", n_constraints_known=0),
+            _ctx(scenario="buying", n_constraints_known=2, turn=2),
+            _ctx(scenario="buying", n_constraints_known=2, turn=9),
+            _ctx(topic="color"),
+            _ctx(scenario="boundary", topic="brand"),
+            _ctx(scenario="intent_override", topic="size"),
+        ]
+        for context in contexts:
+            msg = build_ask_message(context).lower()
+            hits = [kw for kw in keywords if kw in msg]
+            self.assertLessEqual(len(hits), 1, f"bundled multiple attributes in one message: {msg!r} ({hits})")
+
     def test_intent_override_gets_its_own_message(self) -> None:
         msg = build_ask_message(_ctx(scenario="intent_override"))
         default = build_ask_message(_ctx(scenario="buying"))

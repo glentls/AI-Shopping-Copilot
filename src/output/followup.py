@@ -74,30 +74,17 @@ _ATTRIBUTE_QUESTIONS = {
     "use_case": "What will you mainly use it for?",
 }
 
-# -- Situational fallback (used when topic is None -- every attribute already
-# suggested this session, or the caller passed no topic at all) -------------
+# -- Situational fallback (used when topic is None -- every one of the 9
+# specific attributes has already been suggested this session, or the caller
+# passed no context at all). Single-focus, open-ended -- never enumerates
+# several attribute names in one sentence, same rule as the topic-specific
+# questions above: one thing asked at a time, not several at once. -----------
 
-_ASK_INTENT_OVERRIDE = (
-    "Got it, updating my search based on that! Is there anything else — "
-    "like size, color, material, or budget — that would help me narrow it down?"
-)
-_ASK_BOUNDARY = (
-    "No worries, I'll use my judgment there. Anything else you'd like me to "
-    "keep in mind — size, color, material, brand, or budget?"
-)
-_ASK_ZERO_INFO = (
-    "I'd love to help you find the right thing! Could you tell me a bit more "
-    "about what you're looking for — the type of item, and anything like "
-    "color, material, size, or budget that matters to you?"
-)
-_ASK_LATE_TURN = (
-    "We're getting close! Anything specific — size, color, material, or "
-    "price range — that would help me lock in the best match?"
-)
-_ASK_DEFAULT = (
-    "Thanks! Anything else that would help me narrow this down — color, "
-    "size, material, brand, or budget?"
-)
+_ASK_INTENT_OVERRIDE = "Got it, updating my search based on that! Is there anything else that would help?"
+_ASK_BOUNDARY = "No worries, I'll use my judgment there. Anything else you'd like me to keep in mind?"
+_ASK_ZERO_INFO = "I'd love to help you find the right thing! Could you tell me a bit more about what you're looking for?"
+_ASK_LATE_TURN = "We're getting close! Is there anything specific that would help me lock in the best match?"
+_ASK_DEFAULT = "Thanks! Is there anything else that would help me narrow this down?"
 
 # -- Recommend-only variants (used when payload.clarify is False) ------------
 
