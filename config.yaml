@@ -16,19 +16,253 @@ retrieval:
   # SQLite FTS5 candidate pool size before ranking. Ported from starter/agent.py's implicit
   # LIMIT top_k; the skeleton widens it so a future ranker has something to rerank.
   candidate_pool_size: 50
+  # FTS5 tokenizer. Changing this (or details_indexed_keys / bm25_weights below) requires an
+  # index rebuild. Phase 2 tested "porter ..." (Porter stemming) against eval/recall_probe.py:
+  # it LOWERED Recall@100 0.593 -> 0.533 (over-stemming pulls in false matches that dilute the
+  # top-100), so it stays off. See docs/r1_log.md.
+  fts_tokenizer: "unicode61 remove_diacritics 2"
   # bm25(products, ...) column weights, in column order (parent_asin is UNINDEXED so its weight
-  # is inert but kept for positional clarity). Verbatim values carried over from the shipped
-  # starter/agent.py weak baseline so the skeleton reproduces its score exactly.
+  # is inert but kept for positional clarity). Phase 2 tuned against eval/recall_probe.py
+  # (dev-150, turn-1 queries): the only change that helped was features 2.5 -> 4.5 (the material
+  # / fabric / closure strings live there and match customer constraints directly). Raising
+  # title, categories, store, or lowering details/description was neutral-to-negative.
+  # Pre-tune baseline: title 6 / categories 4 / features 2.5 / details 2.5 / store 1.5 / desc 1.
   bm25_weights:
     parent_asin: 0.0
     title: 6.0
     categories: 4.0
-    features: 2.5
+    features: 4.5
     details: 2.5
     store: 1.5
     description: 1.0
+  # Restrict which `details` keys are indexed (case-insensitive); empty list = index the whole
+  # dict. Phase 2 tried an allowlist to cut the ~96% logistics noise (dates, dimensions, model
+  # numbers) -- it LOWERED Recall@100 (0.593 -> 0.553, mostly on intent_override, whose queries
+  # carry long feature/detail sentences that were matching the fuller text). Left empty; BM25's
+  # IDF already discounts ubiquitous noise tokens.
+  details_indexed_keys: []
   max_query_terms: 40
   index_batch_size: 1000
+  # Query-side term filter (not index-side): conversational scaffolding and filler that
+  # otherwise dilutes the OR-of-terms query -- decisive for browsing, whose entire turn-1
+  # query is scaffolding ("I'm looking for <category>, but I'm still exploring").
+  stopwords:
+    - a
+    - an
+    - and
+    - are
+    - as
+    - at
+    - be
+    - but
+    - by
+    - for
+    - from
+    - i
+    - in
+    - is
+    - it
+    - me
+    - my
+    - of
+    - on
+    - or
+    - please
+    - some
+    - that
+    - the
+    - this
+    - to
+    - want
+    - with
+    - would
+    - you
+    - looking
+    - still
+    - exploring
+    - explore
+    - key
+    - requirement
+    - require
+    - need
+    - needs
+    - just
+    - really
+    - also
+    - actually
+    - ignore
+    - earlier
+    - prefer
+    - preference
+    - what
+    - im
+    - shopping
+    - around
+
+  # Dense embedding index (src/retrieval/embed_index.py). `enabled` stays false until Phase 4
+  # wires dense_search + RRF fusion; building/measuring the cache does not need it on.
+  embedding:
+    enabled: false
+    # Phase 3 A/B (dev-150 gold + 8k distractors, subsample recall): bge-small beat
+    # hyp1231/blair-roberta-base 0.77 vs 0.59 R@100 AND builds ~5x faster -- BLAIR's
+    # (metadata<->review) pretraining does not transfer to short synthetic queries here.
+    # BlairEncoder stays in the code (pluggable) for anyone who wants to revisit with
+    # mean-pooling / a query prefix. See docs/r1_log.md.
+    model: "BAAI/bge-small-en-v1.5"
+    query_prefix: "Represent this sentence for searching relevant passages: "  # bge asymmetric-retrieval prefix; applied to QUERIES only (Phase 4)
+    cache_dir: ".cache/embeddings"     # relative -> <repo>/.cache/embeddings (gitignored)
+    batch_size: 64
+    max_seq_length: 160               # docs are front-loaded; 160 vs 256 ~2x faster CPU build, negligible recall loss
+    torch_num_threads: 12
+    # The encoded document string per catalog row. `version` is part of the cache key: bump it
+    # on ANY change below so a stale matrix can never be served.
+    doc_template:
+      version: "v2"
+      field_sep: " | "
+      # categories[2:5] -- Phase 3 A/B: [2,5] beat [1,4] by +5pt R@100. Level 0 is the
+      # universal root, level 1 is gender + promo junk ("20% Off ..."); the signal is levels 2-4.
+      category_slice: [2, 5]
+      max_features: 6
+      # details ON vs OFF was a wash in the A/B (+0.6pt R@100); kept ON for a small browsing edge.
+      # The build plan's spec omitted details -- including it is defensible but not a big win.
+      include_details: true
+      details_keys:
+        - Material
+        - Fabric type
+        - Fabric Type
+        - Outer Material
+        - Department
+        - Closure Type
+        - Color
+        - Style
+        - Pattern
+        - Occasion
+        - Season
+        - Sport Type
+        - Special Feature
+        - Theme
+      description_chars: 160
+
+  # BM25 + dense fusion (src/retrieval/fusion.py, src/retrieval/retriever.py). When enabled,
+  # search() runs both routes and fuses; when off (or the dense cache/encoder is unavailable)
+  # search() is exactly the BM25 path. Enabling this makes Agent.__init__ load the bge encoder
+  # (~20-70s one-time, warm vs cold) so per-turn query encoding (~100ms) does not stall the
+  # agent's timeout executor.
+  #
+  # Phase 5 A/B (dev-150, scored, NullDialog+NullReranker so retrieval order == final order):
+  #   BM25 only ............................. TechScore 0.1278  (hit@10 0.147, MRR 0.087)
+  #   + RRF        d200 w1/1 k60 ............. TechScore 0.1281  -- a WASH: +hit@10, -MRR, net 0
+  #   + z-score fusion d200 bm25:3 dense:1 ... TechScore 0.1535  (hit@10 0.180, MRR 0.094)  +20%
+  # z-score (magnitude-aware) beat both RRF and min-max: on this near-duplicate catalog the
+  # rank gap understates how much better the top dense hit is, and RRF throws that away. BM25
+  # stays the primary signal (weight 3x); dense is a corrective boost -- dense ALONE loses to
+  # BM25 badly (R@100 0.43 vs 0.64), it only earns its keep in fusion. Full ablation + the
+  # recall-probe-vs-scored discrepancy writeup in docs/r1_log.md.
+  #
+  # DEFAULT IS OFF: turning it on adds the torch + sentence-transformers dependency, a ~20-70s
+  # Agent.__init__ cost, and a 77 MB embedding cache that must ship with the submission (or be
+  # rebuilt, ~30 min, needing an HF download). The gain is real and the biggest single R1
+  # lever; flip to true once the team commits to packaging those. Fail-soft: if enabled but
+  # the encoder/cache is unavailable, search() silently runs BM25-only.
+  fusion:
+    enabled: false
+    method: "zscore"    # rrf | minmax | zscore -- Phase 5 A/B picked zscore, see docs/r1_log.md
+    depth: 200          # fuse the top-N of each list, not the top-10
+    rrf_k: 60           # only used when method == rrf
+    weights:
+      bm25: 3.0
+      dense: 1.0
+
+  # -- Phase 6: candidate-pool post-processing (src/retrieval/postprocess.py) --
+
+  # Popularity prior. After BM25/fusion, reorder the pool by
+  #   (1 - weight) * lexical_norm  +  weight * log1p(rating_number)_norm
+  # both min-max normalised across the current pool. Applies to EVERY query -- the one Phase-6
+  # lever that works without dialog populating filters, and the single biggest lever in R1.
+  #
+  # WHY IT WORKS: the evaluator builds each session around a hidden target product, and 148 of
+  # 150 dev targets sit ABOVE the catalog's median rating count -- the median target is at the
+  # 99.5th popularity percentile (7,700 ratings vs a catalog median of 12). Leaning toward
+  # well-reviewed items rescues targets BM25 buried at rank 30-90. The submission spec says the
+  # private set is constructed the same way.
+  #
+  # Phase 6 A/B (dev-150, scored, NullDialog+NullReranker so retrieval order == final order):
+  #   weight 0.00 .. TechScore 0.1278   (hit@10 0.147)
+  #   weight 0.10 .. TechScore 0.1553
+  #   weight 0.20 .. TechScore 0.1693   (hit@10 0.193)   <-- committed: conservative, lexical stays 0.8
+  #   weight 0.30 .. TechScore 0.2074   (hit@10 0.233)
+  #   weight 0.50 .. TechScore 0.2809   (hit@10 0.313)   -- still climbing, but see the caveats
+  # Stacks super-additively with fusion: fusion(zscore) + weight 0.30 -> TechScore 0.2977.
+  #
+  # WEIGHT IS DELIBERATELY LEFT LOW. The curve keeps climbing past 0.5 on dev-150, but: (a) it
+  # is measured with the Null reranker, so a real cross-encoder (R2) may re-sort the top-30 and
+  # change the marginal value; (b) it is tuned on dev, not holdout; (c) a high weight makes the
+  # agent lean on "popular + loosely matching" and largely ignore the conversation, which
+  # regresses hard if the private targets are even a little less popularity-skewed. R4 should
+  # sweep this on the holdout split with the real pipeline before raising it. Zero dependency
+  # cost -- pure arithmetic on rating_number, already in ProductMeta.
+  popularity:
+    enabled: true
+    weight: 0.2
+
+  # Category hard filter (src/retrieval/postprocess.py::CategoryIndex). Driven by
+  # request.hard_filters["category"] -- empty under NullDialog, so INERT today; ships measured
+  # + flagged for when R3 populates it. AND semantics over breadcrumb tokens (scaffolding words
+  # like clothing/shoes/men/women are stripped). `prefilter_pool_size` is how deep each list is
+  # read before filtering when a filter is active, so the surviving pool isn't starved.
+  filters:
+    prefilter_pool_size: 800
+
+  # Relaxation ladder: if an active hard filter cuts the pool below `min_pool_size`, drop the
+  # lowest-priority filter and retry; every dropped / unenforceable key is reported in
+  # RetrievalResult.dropped_constraints. `priority` is high-to-low; only `category` is
+  # enforceable by R1 today (color/size/etc. need indexes R1 doesn't own -> reported as dropped).
+  relaxation:
+    min_pool_size: 10
+    priority:
+      - category
+
+  # Soft preferences from request.soft_prefs (R5/memory populates; empty today -> INERT).
+  # Missing attribute on a candidate is neutral, never a penalty (price is null in ~79% of the
+  # catalog). Additive nudges on top of the min-max lexical score.
+  soft_prefs:
+    enabled: false
+    store_boost: 0.10
+    price_boost: 0.05
+
+  # -- Phase 7: multi-turn retrieval (src/retrieval/multiturn.py) --
+  # Retrieval keeps its own per-session memory (keyed by RetrievalRequest.session_id) and
+  # rebuilds the query from the WHOLE conversation each turn, most-recent terms first.
+  #
+  # INERT under today's wiring: agent.py sends turn=0 / session_id="", and build_effective_query()
+  # is gated on turn>=1 AND a session_id, so it returns the raw query untouched -- eval-full is
+  # byte-identical to Phase 6 (0.1693). It activates the moment R4 adds the ~8-line glue in
+  # docs/plan/r1_contract_change.md. Left ENABLED because query accumulation is correctness, not
+  # tuning: once a real dialog is in place each turn-t message is only the newly disclosed
+  # constraint ("For that, what matters is: cotton.") with no category -- retrieving on that
+  # alone throws away everything said earlier. Zero dependency cost.
+  #
+  # Offline ceiling (eval/recall_probe.py --multiturn, oracle dialog, dev-150, committed config):
+  #   strategy      turn1        turn2        turn3        turn4      (Recall@10)
+  #   latest only   0.453        0.180        0.293        0.340      <- stateless: collapses
+  #   accumulate    0.453        0.700        0.867        0.927      <- committed
+  #   +profile      0.360        0.587        0.793        0.900      <- REJECTED, see below
+  #
+  # profile_blend appends user_profile.preference_tags. Phase 1 measured a small +5pt when the
+  # baseline was turn-1-only BM25; against the accumulated query on the full pipeline it is a
+  # NET NEGATIVE at every turn (generic tags -- warmth/fit/comfort -- add noise), worst on
+  # browsing (t1 0.333 -> 0.083). Stays off.
+  #
+  # rocchio is positive-feedback query expansion (Rocchio beta). Unmeasurable here: the
+  # evaluator provides no accept/reject signal, so request.accepted / request.negatives are
+  # always empty. Shipped + unit-tested for when R5 supplies feedback; off by default.
+  multiturn:
+    enabled: true
+    window_turns: 0        # 0 = accumulate all turns; N = only the last N turns' terms
+    profile_blend: false   # measured net-negative on the full pipeline (see above)
+    rocchio: false         # no accept/reject signal exists in this eval
+    rocchio_add_terms: 6
+    rocchio_avoid_terms: 6
 
 ranking:
   # Depth of the candidate list the reranker is allowed to reorder. NullReranker ignores this

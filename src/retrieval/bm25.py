@@ -19,11 +19,14 @@ from src.config import load_config
 from src.contracts import Candidate, ProductMeta, RetrievalRequest, RetrievalResult
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-STOPWORDS = {
+# Fallback only -- the live list is config.yaml `retrieval.stopwords`. Kept so the module is
+# still usable (tests, ad-hoc calls) without a config on disk.
+STOPWORDS = frozenset({
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
     "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
     "that", "the", "this", "to", "want", "with", "would", "you", "looking",
-}
+})
+_DEFAULT_TOKENIZER = "porter unicode61 remove_diacritics 2"
 _WEIGHT_COLUMN_ORDER = (
     "parent_asin", "title", "categories", "features", "details", "store", "description",
 )
@@ -39,11 +42,25 @@ def _text(value: object) -> str:
     return str(value)
 
 
-def _terms(text: str) -> list[str]:
+def _details_text(details: object, allowed_keys: frozenset[str]) -> str:
+    """Indexed text for the `details` column. `details` is ~96% logistics metadata (dates,
+    dimensions, model numbers); indexing all of it drowns the few signal-bearing keys. When
+    `allowed_keys` is non-empty, only those keys (case-insensitive) contribute."""
+    if not isinstance(details, dict):
+        return ""
+    if not allowed_keys:
+        return _text(details)
+    lowered = {key.lower() for key in allowed_keys}
+    return " ".join(
+        f"{key} {value}" for key, value in details.items() if key.lower() in lowered
+    )
+
+
+def _terms(text: str, stopwords: frozenset[str] = STOPWORDS) -> list[str]:
     return [
         token.lower()
         for token in TOKEN_RE.findall(text)
-        if len(token) > 1 and token.lower() not in STOPWORDS
+        if len(token) > 1 and token.lower() not in stopwords
     ]
 
 
@@ -77,6 +94,20 @@ class BM25Index:
     connection: sqlite3.Connection
     products: dict[str, ProductMeta]
     fallback_pool: list[str]  # catalog IDs sorted by rating_number desc, for deterministic padding
+    stopwords: frozenset[str] = STOPWORDS  # query-side term filter, captured from config at build time
+
+
+def load_products(catalog_path: str | Path) -> dict[str, ProductMeta]:
+    """The `parent_asin -> ProductMeta` map, without building the FTS index. Shared by the
+    dense route (needs ProductMeta for Candidate.meta) and offline eval tooling."""
+    products: dict[str, ProductMeta] = {}
+    with Path(catalog_path).open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            product = json.loads(line)
+            products[str(product["parent_asin"])] = _product_meta(product)
+    return products
 
 
 def build_index(catalog_path: str | Path, config: dict | None = None) -> BM25Index:
@@ -84,14 +115,21 @@ def build_index(catalog_path: str | Path, config: dict | None = None) -> BM25Ind
     # check_same_thread=False: agent.py calls search() from its ThreadPoolExecutor timeout-guard
     # worker thread, not the thread that built this connection. The connection is only ever used
     # from that one worker thread after construction, so this is safe, not a concurrency hazard.
+    retrieval_cfg = config["retrieval"]
+    tokenizer = retrieval_cfg.get("fts_tokenizer", _DEFAULT_TOKENIZER)
+    if "'" in tokenizer or '"' in tokenizer:  # this string is interpolated into DDL
+        raise ValueError(f"invalid fts_tokenizer: {tokenizer!r}")
+    details_keys = frozenset(retrieval_cfg.get("details_indexed_keys") or ())
+    stopwords = frozenset(retrieval_cfg.get("stopwords") or STOPWORDS)
+
     connection = sqlite3.connect(":memory:", check_same_thread=False)
     cursor = connection.cursor()
     cursor.execute(
         "CREATE VIRTUAL TABLE products USING fts5("
         "parent_asin UNINDEXED, title, categories, features, details, store, description, "
-        "tokenize='unicode61 remove_diacritics 2')"
+        f"tokenize='{tokenizer}')"
     )
-    batch_size = config["retrieval"]["index_batch_size"]
+    batch_size = retrieval_cfg["index_batch_size"]
     products: dict[str, ProductMeta] = {}
     ratings: list[tuple[int, str]] = []
     batch: list[tuple[str, str, str, str, str, str, str]] = []
@@ -108,7 +146,7 @@ def build_index(catalog_path: str | Path, config: dict | None = None) -> BM25Ind
                 _text(product.get("title")),
                 _text(product.get("categories")),
                 _text(product.get("features")),
-                _text(product.get("details")),
+                _details_text(product.get("details"), details_keys),
                 _text(product.get("store")),
                 _text(product.get("description")),
             ))
@@ -123,13 +161,17 @@ def build_index(catalog_path: str | Path, config: dict | None = None) -> BM25Ind
     ratings.sort(key=lambda pair: (-pair[0], pair[1]))  # deterministic: rating desc, then asin
     fallback_pool = [asin for _, asin in ratings[:pad_pool_size]]
 
-    return BM25Index(connection=connection, products=products, fallback_pool=fallback_pool)
+    return BM25Index(
+        connection=connection, products=products, fallback_pool=fallback_pool, stopwords=stopwords,
+    )
 
 
 def search(index: BM25Index, request: RetrievalRequest, config: dict | None = None) -> RetrievalResult:
     config = config or load_config()
     retrieval_cfg = config["retrieval"]
-    unique_terms = list(dict.fromkeys(_terms(request.canonical_query)))[: retrieval_cfg["max_query_terms"]]
+    unique_terms = list(dict.fromkeys(_terms(request.canonical_query, index.stopwords)))[
+        : retrieval_cfg["max_query_terms"]
+    ]
     expression = " OR ".join(f'"{term}"' for term in unique_terms)
     if not expression:
         return RetrievalResult([], pool_size=0, dropped_constraints=[])

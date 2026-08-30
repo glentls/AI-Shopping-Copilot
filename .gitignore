@@ -17,3 +17,5 @@ docs/participant_release_checklist.md
 tests/test_5core_builder.py
 tests/test_organizer_pipeline.py
 *.log
+# R1 dense embedding cache (rebuildable from catalog + config; keyed by model+template+catalog SHA).
+.cache/
