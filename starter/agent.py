@@ -321,7 +321,7 @@ class Agent:
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0},
             }
 
-        llm_ranked_ids, summary = self._llm_rank(user_message, candidate_ids, session_id)
+        llm_ranked_ids, summary, usage = self._llm_rank(user_message, candidate_ids, session_id)
         if summary:
             self._preference_summary[session_id] = summary
 
@@ -329,11 +329,11 @@ class Agent:
             "message": "Here are the closest matches I found.",
             "ask_attribute": None,
             "recommendations": [{"parent_asin": pid} for pid in llm_ranked_ids],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "usage": usage,
         }
     
-    def _llm_rank(self, user_message: str, candidate_ids: list[str], session_id: str) -> tuple[list[str], str]:
-        """Ask Claude to rank candidates and summarize preferences. Returns (ranked_ids, summary)."""
+    def _llm_rank(self, user_message: str, candidate_ids: list[str], session_id: str) -> tuple[list[str], str, dict]:
+        """Ask Claude to rank candidates and summarize preferences. Returns (ranked_ids, summary, usage)."""
         candidate_lines = "\n".join(
             f"{i+1}. [{pid}] {self._product_titles.get(pid, 'Unknown product')}"
             for i, pid in enumerate(candidate_ids)
@@ -356,6 +356,7 @@ The ranked_ids list should contain the parent_asin values (the text in brackets)
 
         ranked: list[str] = list(candidate_ids)
         summary: str = ""
+        usage = {"prompt_tokens": 0, "completion_tokens": 0}
 
         try:
             response = self._llm_client.messages.create(
@@ -366,6 +367,11 @@ The ranked_ids list should contain the parent_asin values (the text in brackets)
                     {"role": "assistant", "content": "{"},
                 ],
             )
+
+            usage = {
+                "prompt_tokens": response.usage.input_tokens,
+                "completion_tokens": response.usage.output_tokens,
+            }
 
             raw_text = "{" + response.content[0].text
 
@@ -399,4 +405,4 @@ The ranked_ids list should contain the parent_asin values (the text in brackets)
         except Exception as e:
             print(f"LLM ranking failed, falling back to blended order: {e}")
 
-        return ranked, summary
+        return ranked, summary, usage
