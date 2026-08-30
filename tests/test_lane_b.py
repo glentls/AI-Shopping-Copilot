@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from src.contracts import Candidate, ConversationState, SlotValue
 from src.retrieval import Retriever
+from src.retrieval.bm25 import BM25Index, build_bm25_index
 from src.retrieval.blend import rerank_candidates
 
 
@@ -156,6 +157,57 @@ class RetrieverTest(unittest.TestCase):
                 self.assertNotIn("leather", lowered)
                 self.assertIn("waterproof", lowered)
                 self.assertIn("cotton", lowered)
+
+    def test_query_hygiene_drops_only_the_no_requirement_clause(self) -> None:
+        state = ConversationState("session", {})
+        state.history.append((
+            "customer",
+            "No brand requirement, but I would like a zipper on the dress.",
+        ))
+
+        query = self.retriever._query_text(state).lower()
+
+        self.assertNotIn("brand", query)
+        self.assertNotIn("requirement", query)
+        self.assertIn("zipper", query)
+        self.assertIn("dress", query)
+
+    def test_porter_route_matches_plural_to_singular(self) -> None:
+        root = Path(self.temporary.name) / "porter-case"
+        root.mkdir()
+        catalog = root / "catalog.jsonl"
+        artifacts = root / "artifacts"
+        rows = [
+            {
+                **_row(0),
+                "parent_asin": "TARGET",
+                "title": "Rayon Strap Celebrity Midi Dress",
+                "features": [],
+                "description": [],
+                "categories": ["Clothing", "Dresses"],
+                "details": {},
+            },
+            {
+                **_row(1),
+                "parent_asin": "OTHER",
+                "title": "Long Sleeve Evening Gown",
+                "features": [],
+                "description": [],
+                "categories": ["Clothing", "Dresses"],
+                "details": {},
+            },
+        ]
+        catalog.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        index = BM25Index(build_bm25_index(catalog, artifacts))
+
+        self.assertNotIn("TARGET", {hit.parent_asin for hit in index.search("straps", 10)})
+        self.assertIn(
+            "TARGET",
+            {hit.parent_asin for hit in index.stemmed_search("straps", 10)},
+        )
 
     def test_reasserted_value_is_not_scrubbed_from_queries(self) -> None:
         state = ConversationState("session", {})

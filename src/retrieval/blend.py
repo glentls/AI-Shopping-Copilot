@@ -24,6 +24,7 @@ def _env_float(name: str, default: float) -> float:
 
 def reciprocal_rank_fusion(
     bm25_hits: Sequence[BM25Hit],
+    stemmed_hits: Sequence[BM25Hit],
     dense_hits: Sequence[DenseHit],
     exact_hits: Sequence[BM25Hit],
     profile_ranks: Mapping[str, int],
@@ -31,17 +32,29 @@ def reciprocal_rank_fusion(
     fallback: Sequence[str],
     top_n: int,
     dense_weight: float = 0.10,
+    exact_phrase_mode: bool = False,
 ) -> list[Candidate]:
     """Fuse incomparable scorer outputs by rank, never by raw magnitude."""
     weights = {
         "bm25": _env_float("TJ_BM25_WEIGHT", 1.0),
+        "stemmed": _env_float(
+            "TJ_STEM_EXACT_WEIGHT" if exact_phrase_mode else "TJ_STEM_WEIGHT",
+            0.20 if exact_phrase_mode else 0.40,
+        ),
         "dense": _env_float("TJ_DENSE_WEIGHT", dense_weight),
         "exact": _env_float("TJ_EXACT_WEIGHT", 0.275),
     }
     candidates: dict[str, Candidate] = {}
-    routes = (("bm25", bm25_hits), ("dense", dense_hits), ("exact", exact_hits))
+    routes = (
+        ("bm25", bm25_hits),
+        ("stemmed", stemmed_hits),
+        ("dense", dense_hits),
+        ("exact", exact_hits),
+    )
     for component, hits in routes:
         weight = weights[component]
+        if weight <= 0.0:
+            continue
         for rank, hit in enumerate(hits, 1):
             candidate = candidates.setdefault(hit.parent_asin, Candidate(hit.parent_asin, 0.0))
             contribution = weight / (RRF_K + rank)
@@ -157,7 +170,10 @@ def rerank_candidates(
             "bm25", 0.0
         ):
             candidate.why = "it semantically matches your request"
-        elif candidate.components.get("bm25", 0.0) > 0:
+        elif max(
+            candidate.components.get("bm25", 0.0),
+            candidate.components.get("stemmed", 0.0),
+        ) > 0:
             candidate.why = "it is a strong keyword match for your request"
         else:
             candidate.why = "it is a popular option while preferences are broad"

@@ -12,7 +12,7 @@ from typing import Iterable, Sequence
 
 
 ARTIFACT_NAME = "bm25.sqlite3"
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
 # These words describe the conversation rather than the desired product. FTS
@@ -22,10 +22,10 @@ STOPWORDS = {
     "a", "additional", "an", "and", "are", "as", "ask", "at", "attribute",
     "be", "but", "by", "could", "do", "exploring", "for", "from", "have", "i",
     "in", "is", "it", "judgment", "key", "looking", "matters", "me", "my",
-    "need", "not", "of", "on", "options", "or", "please", "preference",
+    "need", "no", "not", "of", "on", "options", "or", "please", "preference",
     "quite", "requirement", "right", "some", "specific", "still", "that",
     "the", "this", "those", "to", "use", "want", "what", "with", "would",
-    "yet", "you", "your",
+    "well", "yet", "you", "your",
 }
 
 # FTS5's bm25() expects one weight per column, including the unindexed ASIN.
@@ -93,6 +93,9 @@ def build_bm25_index(catalog_path: str | Path, artifacts_dir: str | Path) -> Pat
             "CREATE VIRTUAL TABLE products USING fts5("
             "parent_asin UNINDEXED, title, features, description, categories, store, details, "
             "tokenize='unicode61 remove_diacritics 2');"
+            "CREATE VIRTUAL TABLE products_stemmed USING fts5("
+            "parent_asin UNINDEXED, title, features, description, categories, store, details, "
+            "tokenize='porter unicode61 remove_diacritics 2');"
             "CREATE TABLE product_meta("
             "parent_asin TEXT PRIMARY KEY, price REAL, rating_number INTEGER NOT NULL);"
         )
@@ -119,6 +122,11 @@ def build_bm25_index(catalog_path: str | Path, artifacts_dir: str | Path) -> Pat
         _insert_batches(
             connection.cursor(), product_rows(), "INSERT INTO products VALUES(?,?,?,?,?,?,?)"
         )
+        _insert_batches(
+            connection.cursor(),
+            product_rows(),
+            "INSERT INTO products_stemmed VALUES(?,?,?,?,?,?,?)",
+        )
 
         def metadata_rows() -> Iterable[tuple]:
             with Path(catalog_path).open(encoding="utf-8") as handle:
@@ -136,6 +144,9 @@ def build_bm25_index(catalog_path: str | Path, artifacts_dir: str | Path) -> Pat
             connection.cursor(), metadata_rows(), "INSERT INTO product_meta VALUES(?,?,?)"
         )
         connection.execute("INSERT INTO products(products) VALUES('optimize')")
+        connection.execute(
+            "INSERT INTO products_stemmed(products_stemmed) VALUES('optimize')"
+        )
         connection.commit()
     finally:
         connection.close()
@@ -157,18 +168,26 @@ class BM25Index:
             "SELECT value FROM artifact_info WHERE key='schema_version'"
         ).fetchone()
         if not version or version[0] != SCHEMA_VERSION:
+            self.connection.close()
             raise ValueError(f"unsupported BM25 artifact schema in {path}")
 
     @staticmethod
     def _weights_sql() -> str:
         return ", ".join(str(weight) for weight in FIELD_WEIGHTS)
 
-    def _execute(self, expression: str, limit: int) -> list[BM25Hit]:
+    def _execute(
+        self,
+        expression: str,
+        limit: int,
+        table: str = "products",
+    ) -> list[BM25Hit]:
         if not expression or limit <= 0:
             return []
+        if table not in {"products", "products_stemmed"}:
+            raise ValueError(f"unsupported FTS table: {table}")
         rows = self.connection.execute(
-            "SELECT parent_asin, bm25(products, " + self._weights_sql() + ") AS rank "
-            "FROM products WHERE products MATCH ? ORDER BY rank LIMIT ?",
+            f"SELECT parent_asin, bm25({table}, " + self._weights_sql() + ") AS rank "
+            f"FROM {table} WHERE {table} MATCH ? ORDER BY rank LIMIT ?",
             (expression, int(limit)),
         ).fetchall()
         return [BM25Hit(str(asin), -float(rank)) for asin, rank in rows]
@@ -177,6 +196,12 @@ class BM25Index:
         query_terms = terms(query)[:48]
         expression = " OR ".join(f'"{term}"' for term in query_terms)
         return self._execute(expression, limit)
+
+    def stemmed_search(self, query: str, limit: int) -> list[BM25Hit]:
+        """Search grammatical variants using FTS5's built-in Porter stemmer."""
+        query_terms = terms(query)[:48]
+        expression = " OR ".join(f'"{term}"' for term in query_terms)
+        return self._execute(expression, limit, table="products_stemmed")
 
     def exact_search(self, phrases: Sequence[str], limit: int) -> list[BM25Hit]:
         """Search exact token sequences copied from customer constraint clauses."""
