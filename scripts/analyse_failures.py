@@ -12,6 +12,7 @@ scripts/harness.py). Never edits evaluator/ or data/.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from evaluator.local_evaluator import catalog_index, load_jsonl
@@ -46,11 +47,12 @@ def main() -> None:
     parser.add_argument("--catalog", default="data/catalog.jsonl")
     parser.add_argument("--dataset", default="data/public_set.jsonl")
     parser.add_argument("--output", default=None)
+    parser.add_argument("--agent-kwargs", default="{}", help="JSON kwargs passed to the Agent constructor")
     args = parser.parse_args()
 
     samples = load_jsonl(args.dataset)
     catalog_ids, categories, products = catalog_index(args.catalog)
-    agent = load_agent(args.agent_import, args.catalog)
+    agent = load_agent(args.agent_import, args.catalog, **json.loads(args.agent_kwargs))
 
     output_path = Path(args.output) if args.output else Path("runs") / f"failures_{args.name}.md"
     output_path.parent.mkdir(exist_ok=True)

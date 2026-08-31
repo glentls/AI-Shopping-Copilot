@@ -32,11 +32,12 @@ def main() -> None:
     parser.add_argument("--dataset", default="data/public_set.jsonl")
     parser.add_argument("--k", type=int, default=1000, help="Candidate pool depth to probe")
     parser.add_argument("--output", default=None)
+    parser.add_argument("--agent-kwargs", default="{}", help="JSON kwargs passed to the Agent constructor")
     args = parser.parse_args()
 
     samples = load_jsonl(args.dataset)
     catalog_ids, categories, products = catalog_index(args.catalog)
-    agent = load_agent(args.agent_import, args.catalog)
+    agent = load_agent(args.agent_import, args.catalog, **json.loads(args.agent_kwargs))
 
     sessions = [run_session(agent, sample, catalog_ids, categories, products, top_k=args.k) for sample in samples]
 

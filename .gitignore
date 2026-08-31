@@ -5,6 +5,9 @@ __pycache__/
 results.json
 runs/
 data/catalog.jsonl
+data/dense_index/
+data/model_cache/
+.venv/
 data/releases/
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/

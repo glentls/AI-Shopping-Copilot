@@ -70,11 +70,12 @@ def main() -> None:
     )
     parser.add_argument("--catalog", default="data/catalog.jsonl")
     parser.add_argument("--dataset", default="data/public_set.jsonl")
+    parser.add_argument("--agent-kwargs", default="{}", help="JSON kwargs passed to the Agent constructor, e.g. '{\"config_path\": \"configs/retrieval_lexical_only.json\"}'")
     args = parser.parse_args()
 
     samples = load_jsonl(args.dataset)
     catalog_ids, categories, products = catalog_index(args.catalog)
-    agent = load_agent(args.agent_import, args.catalog)
+    agent = load_agent(args.agent_import, args.catalog, **json.loads(args.agent_kwargs))
     result = evaluate(agent, samples, catalog_ids, categories, products)
 
     RUNS_DIR.mkdir(exist_ok=True)

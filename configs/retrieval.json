@@ -1,0 +1,12 @@
+{
+  "routes": {
+    "lexical": {"enabled": true, "weight": 1.0},
+    "dense": {"enabled": true, "weight": 1.0},
+    "structured": {"enabled": true, "weight": 0.5}
+  },
+  "candidate_k": 100,
+  "rrf_k": 60,
+  "dense_model": "BAAI/bge-small-en-v1.5",
+  "dense_cache_dir": "data/dense_index",
+  "model_cache_dir": "data/model_cache"
+}

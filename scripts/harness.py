@@ -32,15 +32,18 @@ from evaluator.local_evaluator import (
 )
 
 
-def load_agent(spec: str, catalog_path: str) -> Any:
-    """Import "module:ClassName" and construct it as ClassName(catalog_path), matching
-    how evaluator.local_evaluator.main() constructs the Agent (evaluator/local_evaluator.py:306)."""
+def load_agent(spec: str, catalog_path: str, **kwargs: Any) -> Any:
+    """Import "module:ClassName" and construct it as ClassName(catalog_path, **kwargs).
+    With no kwargs this matches how evaluator.local_evaluator.main() constructs the Agent
+    (evaluator/local_evaluator.py:306) -- kwargs (e.g. config_path=...) are our own
+    ablation-only extension for selecting between retrieval configs, never required by
+    the official evaluator's construction."""
     module_name, _, class_name = spec.partition(":")
     if not module_name or not class_name:
         raise ValueError(f"--agent-import must be 'module:ClassName', got {spec!r}")
     module = importlib.import_module(module_name)
     agent_cls = getattr(module, class_name)
-    return agent_cls(catalog_path)
+    return agent_cls(catalog_path, **kwargs)
 
 
 def normalize_recommendations_k(payload: object, catalog_ids: set[str], k: int) -> list[str]:
