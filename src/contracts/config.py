@@ -212,7 +212,7 @@ CONFIGS: dict[str, RunConfig] = {
     # Research-derived ablation: Y with only the widened window's scope
     # narrowed. Popularity and profile are population-level priors whose values
     # were fitted across sessions, not evidence about this shopper; they may
-    # break ties inside a frozen Top-K but may not decide who is in it.
+    # reorder a frozen Top-K but may not decide who is in it.
     "J": replace(
         _A,
         name="J",
@@ -248,9 +248,9 @@ CONFIGS: dict[str, RunConfig] = {
         popularity_rerank_weight=POPULARITY_RERANK_WEIGHT,
         exclude_shown=True,
     ),
-    # N with the phrase reranker replaced by disclosure-order ranking, so a
-    # candidate satisfying more of what the shopper said always outranks one
-    # satisfying fewer, rather than more inverse-frequency evidence winning.
+    # N with the phrase reranker replaced by disclosure-priority lexicographic
+    # ranking. At the first disclosure where two candidates differ, the match
+    # wins; total match count is diagnostic rather than the ordering objective.
     "O": replace(
         _A,
         name="O",
@@ -267,6 +267,11 @@ CONFIGS: dict[str, RunConfig] = {
     ),
     "Z": replace(_A, name="Z", clarification="off"),
 }
+
+# Frozen no-repeat candidate: exactly T plus the already-tested shown-product
+# exclusion seam. Keeping this as a copy of T prevents an experimental config
+# from silently drifting when T's other defaults are reviewed.
+CONFIGS["K"] = replace(CONFIGS["T"], name="K", exclude_shown=True)
 
 # The configuration the submission claims and is graded on. Documented in
 # the README under "Retention decision"; a test binds the two together.

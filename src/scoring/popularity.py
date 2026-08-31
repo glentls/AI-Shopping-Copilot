@@ -12,12 +12,13 @@ ALLOWED_POPULARITY_WEIGHTS = frozenset((0.05, 0.10, 0.15, 0.20))
 
 
 class PopularityReranker:
-    """Apply a bounded catalog-popularity prior to frozen Top-K membership.
+    """Apply a bounded catalog-popularity prior to the supplied candidates.
 
-    Popularity is deliberately subordinate to relevance: this class receives
-    only the already-selected Top-K and cannot add or remove a product. Counts
-    are log-scaled against the immutable catalog maximum so a single viral
-    product cannot contribute an unbounded score.
+    This class never adds or removes a product, but its additive bonus can
+    reverse a sufficiently small incoming score gap. Whether that reordering
+    changes final Top-K membership therefore depends on the caller's rerank
+    window and scope. Counts are log-scaled against the immutable catalog
+    maximum so a single viral product cannot contribute an unbounded score.
     """
 
     def __init__(

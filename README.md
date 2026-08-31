@@ -262,8 +262,9 @@ Separate warm dev processes measured peak RSS of `1,527,340` KB for F and
 
 ### Retention decision
 
-`T` is the submission configuration. It is the strongest measured candidate on
-both splits, and the reasoning matters more than the number.
+`T` is the submission configuration. It is the strongest canonical reportable
+candidate recorded on both splits, and the reasoning matters more than the
+number.
 
 **Why an exploratory holdout does not disqualify it.** The competition
 specification designates all 200 public sessions as development data and keeps
@@ -276,12 +277,13 @@ that self-imposed control, and the exploratory label records precisely where.
 constrains is the strength of the claim attached to the holdout number, not the
 validity of the configuration itself.
 
-**Why the downside is bounded.** HR@10 is identical for every configuration in
-the table above, at `0.941667` on dev and `0.975000` on holdout. Each reranker
-permutes order strictly inside the frozen Top-10 and never changes which
-products are retrieved. A prior that fails to transfer to the private 800 can
-therefore cost ranking position, but it cannot cost recall, and HR@10 carries
-half the TechnicalScore weight.
+**Why the downside is bounded.** Across the canonical P, Q, R, S, and T rows,
+measured HR@10 is identical at `0.941667` on dev and `0.975000` on holdout.
+T's phrase, popularity, and profile rerankers operate inside a frozen Top-10;
+they can change rank but not membership. Symmetric intent routing is the
+separate R component. A prior that fails to transfer can therefore hurt MRR,
+but cannot by itself change HR@10, which carries half the TechnicalScore
+weight.
 
 **Why the gain looks structural rather than fitted.** `T`'s margin over `Q`
 grew from `+0.004691` on dev to `+0.011309` on holdout, and on both splits it
@@ -307,7 +309,7 @@ submission configuration T; an unknown value still falls back safely to
 baseline A. Hybrid configurations use the optional dense install when present
 and degrade to BM25 when it is absent.
 
-| Config | Change from the preceding build |
+| Config | Configuration behavior |
 |---|---|
 | A | BM25 plus clarification |
 | B | Hybrid retrieval |
@@ -328,9 +330,21 @@ and degrade to BM25 when it is absent.
 | X | T plus suppression of a preference the shopper replaced on override |
 | Y | T with reranking applied to the top 50 before truncation, so it can change Top-10 membership |
 | J | Y with the widened window restricted to per-session evidence, so the popularity and profile priors may reorder a frozen Top-10 but not decide its membership |
-| N | Q plus no-repeat recommendations: an asin already offered and scored is withheld from later turns, and an intent override clears that memory |
-| O | N with disclosure-order ranking replacing phrase-rarity reranking inside the frozen Top-10 |
+| K | T plus the same best-effort no-repeat filter as N; canonical evaluation gate pending |
+| N | Q plus best-effort no-repeat recommendations: an asin already offered is withheld while alternatives remain, and an intent override clears that memory |
+| O | N with lexicographic disclosure-order ranking replacing phrase rarity; earlier disclosures take priority, so this does not maximize total matches |
 | Z | Clarification off, diagnostic only |
+
+Recent experimental evidence is deliberately separated from canonical rows:
+
+| Config | Evidence status |
+|---|---|
+| W, X, J, O | Implemented and unit-tested, but no canonical reportable evaluation row |
+| K | Implemented with a [frozen J/K gate](docs/testing/config-j-k-selection-gate.tdd.md); no canonical result is claimed |
+| Y | Non-canonical dev diagnostic reported `-0.006243` versus T; not retained and no holdout opened |
+| N | Commit-message dev/holdout diagnostics only; no canonical `results.jsonl` row |
+
+None of W, X, Y, J, K, N, or O currently replaces T.
 
 U is a documented research ablation, not a retained configuration. Its clean
 dev run at `87834f4` kept HR@10 at `0.941667` and raised MRR from P's
@@ -358,9 +372,9 @@ it, and `feature`, which is asked first, is populated on 99.43% of the
 Q uses only the immutable organizer catalog. For each member of P's frozen
 Top-10 it log-scales `rating_number` against the catalog maximum and adds
 `0.15 * popularity / 61` to the existing P score. It then reorders those same
-identifiers deterministically. The prior cannot change HitRate@10 or MTTC; it
-is an ordering aid, never a retrieval filter or a replacement for
-disclosed-constraint evidence.
+identifiers deterministically. The prior cannot change HitRate@10 or MTTC, but
+it can change rank whenever its bounded bonus exceeds the preceding score gap;
+it is an ordering prior, not a retrieval filter.
 
 The evaluator reports HR@10, MRR, MTTC, efficiency, the recommended composite,
 and the same metrics per scenario. Changes should be retained only after gains
@@ -373,10 +387,11 @@ provider. Neither is claimed as completed.
 
 ## Cost, latency, and network disclosure
 
-Configs A–G, P, Q, and U use zero prompt tokens, zero completion tokens, and no
-paid service, so their model cost is $0. They run fully offline after the
-catalog and selected local dependencies are present. Experimental results
-remain subject to their stated retention gates.
+The implemented agent has no hosted-model client. Config T records zero prompt
+tokens, zero completion tokens, and $0 API cost; its lexical, dense, and local
+reranking paths run offline after the catalog and local dependencies are
+present. H remains non-reportable because no LLM-ranking provider is shipped.
+Experimental results remain subject to their stated retention gates.
 
 ## Limitations
 
@@ -390,7 +405,8 @@ remain subject to their stated retention gates.
   do not override explicit within-session preferences.
 - Q's rating-count prior favors established products and can disadvantage
   niche or newly listed products. It is log-bounded, applies only after Top-10
-  membership is frozen, and never substitutes popularity for relevance.
+  membership is frozen, but can reorder products separated by a sufficiently
+  small preceding-score gap.
 - Public target construction strongly favors products with many ratings, so
   Q may overfit that benchmark prior even though its coefficient is dev-only.
 - Facet extraction is deliberately shallow and deterministic; it cannot infer

@@ -64,9 +64,9 @@ preserving HR/MTTC. A paired, scenario-stratified 10,000-resample bootstrap
 `[0.010258, 0.029980]`.
 
 The next candidate, Q, adds a bounded log-scaled rating-count prior
-inside P's already-frozen Top-10. It preserves P's relevance score and adds a
+inside P's already-frozen Top-10. It starts from P's score and adds a
 maximum-weighted `0.15 * popularity / 61` bonus, without filtering products or
-changing catalog membership. Q scored `0.862083` on dev (HR@10 `0.941667`, MRR
+changing Top-10 membership. Q scored `0.862083` on dev (HR@10 `0.941667`, MRR
 `0.779722`, MTTC `3.133333`): 50 target ranks improved, none regressed, and all
 four scenario MRRs increased. A later reportable holdout row scored an
 exploratory `0.880321` (HR@10 `0.975`, MRR `0.766071`, MTTC `2.85`). The idea
@@ -95,13 +95,15 @@ which required it to beat not merely `P` but the best single component. It
 scored `0.866774` on dev and an exploratory `0.891630` on holdout, inheriting
 Q's label because it carries Q's prior.
 
-**`T` is the submission configuration.** Its downside is bounded: HR@10 is
-identical across every candidate at `0.941667` on dev and `0.975` on holdout,
-so the rerankers permute order strictly inside the frozen Top-10 and cannot
-cost recall. Its advantage over `Q` also replicates across both splits and
-localises to Intent Override, which is `R`'s contribution and holds a clean
-holdout of its own. If an untouched holdout is required instead, `S` is the
-best clean candidate; we report both rather than only the stronger one.
+**`T` is the submission configuration and strongest canonical reportable
+candidate.** Across the canonical P, Q, R, S, and T comparisons, measured HR@10
+is identical at `0.941667` on dev and `0.975` on holdout. T's phrase,
+popularity, and profile rerankers operate inside a frozen Top-10, so they can
+alter rank but not membership; symmetric intent routing is the separate R
+component. T's advantage over Q replicates across both splits and localises to
+Intent Override, which is R's contribution and holds a clean holdout of its
+own. If an untouched holdout is required instead, S is the best clean
+candidate; we report both rather than only the stronger one.
 
 The research-derived U ablation replaced only P's information-gain question
 policy with deterministic expected-question-value scoring. On a clean dev run

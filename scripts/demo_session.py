@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent import Agent  # noqa: E402
+from src.contracts.config import SUBMISSION_CONFIG_NAME  # noqa: E402
 from src.retrieval import HybridRetriever  # noqa: E402
 from src.retrieval.dense import DenseRetriever  # noqa: E402
 
@@ -84,7 +85,11 @@ def render_turn(agent: Agent, turn: int, message: str, response: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a ShopLens multi-turn demo")
     parser.add_argument("--catalog", default="data/catalog.jsonl")
-    parser.add_argument("--config", default="P")
+    parser.add_argument(
+        "--config",
+        default=SUBMISSION_CONFIG_NAME,
+        help=f"registered config to demonstrate (default: submission config {SUBMISSION_CONFIG_NAME})",
+    )
     args = parser.parse_args()
 
     agent = Agent(args.catalog, config=args.config)

@@ -193,8 +193,10 @@ class Agent:
         # one response.
         pool = candidates
         over_general = self.policy.is_over_general(pool, safe_k)
-        # Reranking may improve reciprocal rank but must not change Top-K
-        # membership and therefore Hit Rate@10.
+        # The default window freezes Top-K membership before reranking. An
+        # explicitly wider experimental window lets later signals also choose
+        # membership; rerank_window_scope controls how far that permission
+        # extends.
         window = rerank_window_size(safe_k, self.config.rerank_window)
         candidates = sorted(candidates, key=lambda item: (-item.score, item.asin))[:window]
         if self.reranker is not None:
@@ -215,8 +217,10 @@ class Agent:
         if self.popularity_reranker is not None:
             candidates = self.popularity_reranker.rerank(candidates)
         if self.profile_reranker is not None:
-            # Applied last and inside frozen membership: the supplied profile may
-            # break a tie the disclosed constraints left open, never outrank them.
+            # Applied last. Under the default window, or the evidence-scoped
+            # window after its early truncation above, this can only reorder a
+            # frozen Top-K. The broader experimental scope deliberately exposes
+            # the full window to this prior as well.
             candidates = self.profile_reranker.rerank(state, candidates)
         # Truncate last: with the default window this is a no-op, and with a
         # wider one it is the point where reranking is allowed to decide

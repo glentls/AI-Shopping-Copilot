@@ -49,7 +49,7 @@ def test_a_popularity_prior_alone_must_not_decide_membership(
 
     Popularity is a population-level prior, not evidence about this shopper,
     and its value was established by reviewing all public sessions. It may
-    break ties inside a frozen Top-10; it may not decide who is in it.
+    reorder candidates inside a frozen Top-10; it may not decide who enters it.
     """
     assert "B0015" in _top10(popularity_split_catalog, "Y")
     assert "B0015" not in _top10(popularity_split_catalog, "J")

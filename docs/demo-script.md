@@ -15,36 +15,36 @@ third-party media.
    matching the README setup. Either invocation works:
 
    ```bash
-   .venv-dense/bin/python scripts/demo_session.py --config Q
-   .venv-dense/bin/python -m scripts.demo_session --config Q
+   .venv-dense/bin/python scripts/demo_session.py
+   .venv-dense/bin/python -m scripts.demo_session
    ```
+
+   The script reads the shared submission default, currently config T, instead
+   of carrying a second hard-coded demo default.
 
    A stock `python3` without the dense dependencies is **not** usable for
    recording. Hybrid retrieval degrades to BM25 silently at the library level,
    so the demo would show BM25 results while the narration says hybrid. The
-   script refuses rather than letting that happen, and exits non-zero:
+   script refuses rather than letting that happen and exits non-zero.
 
-   ```
-   config Q requests hybrid retrieval but this interpreter provides bm25.
-   ```
-
-   If that message appears, stop and fix the environment; do not record around
-   it.
+   If the requested/effective retrieval mismatch appears, stop and fix the
+   environment; do not record around it.
 
    Each turn prints the customer line, the agent reply, the attribute asked,
    and the ranked Top 10 as `rank. title  parent_asin`, so a viewer can judge
    whether the ranking is good instead of reading opaque identifiers. Point out
    the accumulated requirements, the turn-three override retiring the earlier
    preference, and the zero token usage printed at the end.
-5. Run the clean reportable evaluator and display `results.jsonl`, using the
-   same interpreter:
+5. Show the existing clean reportable T rows in `results.jsonl` and the summary
+   table in `README.md`:
 
    ```bash
-   .venv-dense/bin/python -m src.eval.runner --config Q --split holdout
+   rg -n '"config":"T"' results.jsonl
    ```
 
-   This run must be made from a clean tree; the runner refuses to append
-   non-reportable evidence to the canonical log.
+   Do not rerun holdout for the recording. The recorded T holdout is already
+   exploratory, and candidate holdout access belongs only to the frozen
+   evaluation gate, not the demo workflow.
 
    Explain HR@10, MRR, MTTC, per-scenario results, elapsed time, peak RSS,
    effective retriever, in-process vector provenance, catalog/dataset digests,

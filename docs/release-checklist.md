@@ -14,7 +14,9 @@
 ## Reproduction and evidence
 
 - [ ] A clean install reproduces config A without optional dependencies.
-- [ ] The locked dense environment reproduces configs B–H, P, and Q fully offline.
+- [ ] The locked dense environment reproduces submission config T and every
+      candidate considered for promotion fully offline; H remains explicitly
+      non-reportable because no LLM-ranking provider is shipped.
 - [ ] Clean reportable dev and holdout runs exist for baseline P and for the
       submission config T.
 - [x] Config Q has clean reportable dev evidence at `1b55d92`, exact P/Q
@@ -36,13 +38,16 @@
       exception count, dependency/model versions, catalog/dataset digests,
       model/vector provenance, cache state, elapsed time, and peak RSS.
 - [ ] README candidate metrics are replaced or confirmed by durable clean-commit records.
+- [ ] W, X, J, K, and O remain labelled unmeasured until canonical reportable
+      rows exist; Y and N diagnostics are not presented as canonical evidence.
 
 ## Required external deliverables
 
 - [ ] Devpost description is complete and matches the released implementation.
 - [ ] Public GitHub URL is added to Devpost.
 - [ ] Public YouTube demo URL is added to Devpost and README.
-- [ ] Demo shows a multi-turn session and measured result evidence.
+- [ ] Demo shows a multi-turn T session and existing measured result evidence;
+      it does not open or rerun holdout live.
 - [ ] Tools, libraries, APIs, datasets, cost, limitations, and exact team
       contributions are disclosed.
 - [ ] No third-party trademarks or copyrighted media appear without permission.

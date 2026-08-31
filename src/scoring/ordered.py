@@ -40,13 +40,13 @@ def contains(tokens: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
 
 
 class OrderedConstraintReranker:
-    """Rank a frozen Top-K by which disclosures a candidate satisfies.
+    """Rank a frozen Top-K by disclosure-priority match vectors.
 
     The phrase reranker sums inverse pool frequency, so a candidate matching
-    two common disclosures can outrank one matching every disclosure. Ranking
-    lexicographically removes that trade: satisfying more of what the shopper
-    actually said always wins, and the disclosure order only breaks ties among
-    candidates that satisfy different subsets.
+    two common disclosures can outrank one matching an uncommon disclosure.
+    This reranker makes the earliest disclosure on which two candidates differ
+    decisive. Match count is retained as a diagnostic, but is not the ordering
+    objective: one earlier match may outrank several later matches.
 
     Membership is preserved. This reorders the frozen set and never adds to it.
     """

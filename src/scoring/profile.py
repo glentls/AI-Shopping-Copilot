@@ -13,23 +13,24 @@ ALLOWED_PROFILE_WEIGHTS = frozenset((0.02, 0.05, 0.10))
 
 
 class ProfileAffinityReranker:
-    """Order frozen Top-K membership by within-session profile-tag affinity.
+    """Apply bounded within-session profile-tag affinity to supplied candidates.
 
-    ``plan.md`` §2.7 measures the supplied profile as near-signal-free: across
-    all 200 public sessions only ``preference_tags`` and ``rating_style`` vary,
-    and ``difficulty_bucket`` is pure scenario leakage. Finding 10 therefore
-    permits profile use only within the session, only with a measured gain, and
-    never in a position to override an explicit current-turn constraint.
+    The public-set audit found the supplied profile to be near-signal-free:
+    across all 200 public sessions only ``preference_tags`` and
+    ``rating_style`` vary, while ``difficulty_bucket`` leaks scenario metadata.
+    Profile use is therefore confined to the current session and retained only
+    when supported by measured evaluation.
 
     Three properties keep that boundary structural rather than documentary:
 
-    * Only the Top-K already selected by disclosed constraints is received, so
-      the prior cannot add, remove, or resurrect a product and cannot move
-      HitRate@10 or MTTC.
+    * The prior cannot add, remove, or resurrect a product. Under the default
+      or evidence-scoped window it receives a frozen Top-K; a broader caller
+      may expose a larger set whose later truncation can change membership.
     * Nothing is retained between sessions. The tags come from the profile the
       evaluator supplies to ``reset`` for this session alone.
-    * The bonus is bounded well below the constraint and phrase components, so a
-      profile tag can only break a tie the disclosed evidence already left open.
+    * The bonus is bounded, but remains additive and may reverse an incoming
+      score gap smaller than that bound. It is a soft prior, not a hard
+      relevance-ordering guarantee.
     """
 
     def __init__(
