@@ -4,7 +4,7 @@
     "dense": {"enabled": true, "weight": 1.0},
     "structured": {"enabled": true, "weight": 0.5}
   },
-  "candidate_k": 100,
+  "candidate_k": 300,
   "rrf_k": 60,
   "dense_model": "sentence-transformers/all-MiniLM-L6-v2",
   "dense_cache_dir": "data/dense_index",

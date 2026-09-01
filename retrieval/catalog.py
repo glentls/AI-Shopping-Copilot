@@ -48,9 +48,22 @@ def lexical_text(product: dict) -> str:
     )
 
 
+DENSE_TEXT_CHAR_CAP = 500
+
+
 def dense_text(product: dict) -> str:
-    """Richer text for the semantic route: adds features, which the lexical route omits."""
-    return " ".join(
+    """Richer text for the semantic route: adds features, which the lexical route omits.
+
+    Capped at DENSE_TEXT_CHAR_CAP characters. This isn't just a size nicety: on this
+    project's dev hardware, uncapped catalog text (avg 1,242 chars, max 5,836) made a
+    single embedding pass over the 50k catalog project to ~22 hours with BAAI/bge-small
+    -en-v1.5, vs. ~37 minutes for a title+lead-description+features window at this cap
+    with all-MiniLM-L6-v2 (see retrieval/dense.py for the model choice writeup). Longer
+    catalog text is dominated by boilerplate (shipping/care instructions, brand history)
+    well past the point of adding retrieval-relevant signal, so the truncation is a
+    reasonable trade, not just a speed hack.
+    """
+    text = " ".join(
         part
         for part in (
             str(product.get("title") or ""),
@@ -60,6 +73,7 @@ def dense_text(product: dict) -> str:
         )
         if part
     )
+    return text[:DENSE_TEXT_CHAR_CAP]
 
 
 def price_of(product: dict) -> float | None:

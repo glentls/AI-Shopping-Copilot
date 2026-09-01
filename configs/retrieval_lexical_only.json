@@ -6,7 +6,7 @@
   },
   "candidate_k": 100,
   "rrf_k": 60,
-  "dense_model": "BAAI/bge-small-en-v1.5",
+  "dense_model": "sentence-transformers/all-MiniLM-L6-v2",
   "dense_cache_dir": "data/dense_index",
   "model_cache_dir": "data/model_cache"
 }
