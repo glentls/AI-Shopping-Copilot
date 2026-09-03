@@ -17,6 +17,8 @@ from dialog.portfolio import portfolio_rerank
 from dialog.posterior import RejectionTracker
 from dialog.question_policy import choose_attribute
 from dialog.slots import ASK_ATTRIBUTE_BLOCKLIST, SlotState
+from llm.reranker import DEFAULT_MODEL as DEFAULT_LLM_MODEL
+from llm.reranker import LLMReranker
 from retrieval.catalog import lexical_text, load_catalog
 from retrieval.dense import DenseRetriever
 from retrieval.fusion import reciprocal_rank_fusion
@@ -88,6 +90,17 @@ class Agent:
         self._explore_exploit: bool = dialog_cfg.get("explore_exploit", False)
         self._question_policy: str = dialog_cfg.get("question_policy", "none")  # "none" | "fixed" | "eig"
 
+        llm_cfg = self.config.get("llm_rerank", {})
+        self._llm_rerank_enabled: bool = llm_cfg.get("enabled", False)
+        self._llm_candidate_depth: int = int(llm_cfg.get("candidate_depth", 50))
+        self._reranker: LLMReranker | None = None
+        if self._llm_rerank_enabled:
+            self._reranker = LLMReranker(
+                model=llm_cfg.get("model", DEFAULT_LLM_MODEL),
+                timeout_seconds=float(llm_cfg.get("timeout_seconds", 20.0)),
+                cache_dir=llm_cfg.get("cache_dir", "data/llm_cache"),
+            )
+
         self._sessions: dict[str, _SessionState] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
@@ -146,6 +159,17 @@ class Agent:
         else:
             final = fused[:top_k]
 
+        usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        if self._llm_rerank_enabled and self._reranker is not None:
+            # Reranks the *wider* fused pool, not the already-narrowed `final` list --
+            # CLAUDE.md Phase 4: "Rerank the fused top-50 down to the final 10." Falls
+            # back to whatever Phase 3 already produced (`final`) on any failure: no
+            # key, network error, timeout, or a malformed tool response.
+            pool = [self.products[asin] for asin in fused[: self._llm_candidate_depth] if asin in self.products]
+            llm_ranked, usage = self._reranker.rerank(query, pool)
+            if llm_ranked is not None:
+                final = llm_ranked[:top_k]
+
         state.shown.update(final)
         state.last_shown = final
 
@@ -160,7 +184,7 @@ class Agent:
             "message": message,
             "ask_attribute": ask_attribute,
             "recommendations": [{"parent_asin": asin} for asin in final],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "usage": usage,
         }
 
     def _choose_ask_attribute(self, state: _SessionState, fused: list[str]) -> str | None:
